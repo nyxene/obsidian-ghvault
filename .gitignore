@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.production
+.env.stage
+.env.dev
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite
+
+# Test
+coverage/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+logs/
+
+# Private docs (local only)
+docs/private/
+
+# Misc
+*.tgz
+*.tar.gz
+.cache/
