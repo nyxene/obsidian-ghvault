@@ -8,6 +8,8 @@ function createMockApp(): App {
 		vault: {
 			adapter: {
 				append: vi.fn().mockResolvedValue(undefined),
+				read: vi.fn().mockResolvedValue(""),
+				write: vi.fn().mockResolvedValue(undefined),
 			},
 		},
 	} as unknown as App;
@@ -86,5 +88,23 @@ describe("Logger", () => {
 		logger.setLevel("info");
 		logger.info("now included");
 		expect(append).toHaveBeenCalledOnce();
+	});
+
+	it("redacts GitHub tokens from log output", () => {
+		logger.info("token is ghp_abcdefghijklmnopqrstuvwx");
+
+		const append = app.vault.adapter.append as ReturnType<typeof vi.fn>;
+		const line = append.mock.calls[0][1] as string;
+		expect(line).not.toContain("ghp_");
+		expect(line).toContain("[REDACTED]");
+	});
+
+	it("redacts Bearer tokens from log output", () => {
+		logger.error("auth failed", { header: "Bearer ghp_abc123def456ghi789jkl012" });
+
+		const append = app.vault.adapter.append as ReturnType<typeof vi.fn>;
+		const line = append.mock.calls[0][1] as string;
+		expect(line).not.toContain("Bearer ghp_");
+		expect(line).toContain("[REDACTED]");
 	});
 });

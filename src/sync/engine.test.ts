@@ -11,7 +11,10 @@ const emptyPull: PullResult = { created: [], modified: [], deleted: [], errors: 
 const emptyPush: PushResult = { pushed: [], deleted: [], oid: "" };
 
 function createMockPullEngine(result: PullResult = emptyPull): PullEngine {
-	return { pull: vi.fn().mockResolvedValue(result) } as unknown as PullEngine;
+	return {
+		pull: vi.fn().mockResolvedValue(result),
+		updateCacheFromCommit: vi.fn().mockResolvedValue(undefined),
+	} as unknown as PullEngine;
 }
 
 function createMockPushEngine(result: PushResult = emptyPush): PushEngine {

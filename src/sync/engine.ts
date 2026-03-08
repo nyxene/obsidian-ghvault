@@ -34,7 +34,7 @@ export class SyncEngine {
 	private readonly vault: SyncVault;
 	private readonly logger: Logger;
 	private readonly commitOptions: Omit<PushCommitOptions, "message">;
-	private syncing = false;
+	private syncPromise: Promise<SyncResult> | null = null;
 
 	constructor(options: SyncEngineOptions) {
 		this.pullEngine = options.pullEngine;
@@ -46,19 +46,19 @@ export class SyncEngine {
 	}
 
 	get isSyncing(): boolean {
-		return this.syncing;
+		return this.syncPromise !== null;
 	}
 
 	async sync(): Promise<SyncResult> {
-		if (this.syncing) {
+		if (this.syncPromise) {
 			throw new Error("Sync already in progress");
 		}
 
-		this.syncing = true;
+		this.syncPromise = this.executeSyncCycle();
 		try {
-			return await this.executeSyncCycle();
+			return await this.syncPromise;
 		} finally {
-			this.syncing = false;
+			this.syncPromise = null;
 		}
 	}
 
@@ -81,6 +81,10 @@ export class SyncEngine {
 				...this.commitOptions,
 				message: `vault sync: ${localChanges.length} file(s)`,
 			});
+
+			if (push.oid) {
+				await this.pullEngine.updateCacheFromCommit(push.oid);
+			}
 		} else {
 			this.logger.info("No local changes to push");
 		}

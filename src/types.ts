@@ -7,7 +7,6 @@ export interface GHVaultSettings {
 	owner: string;
 	repo: string;
 	branch: string;
-	repoPath: string;
 	logLevel: LogLevel;
 }
 
@@ -132,6 +131,5 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	owner: "",
 	repo: "",
 	branch: "main",
-	repoPath: "",
 	logLevel: "info",
 };

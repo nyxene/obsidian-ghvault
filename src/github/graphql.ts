@@ -132,6 +132,7 @@ export class GitHubGraphQL {
 			headers: {
 				Authorization: `Bearer ${this.token}`,
 				"Content-Type": "application/json",
+				"Cache-Control": "no-cache",
 			},
 			body: JSON.stringify({
 				query: CREATE_COMMIT_MUTATION,

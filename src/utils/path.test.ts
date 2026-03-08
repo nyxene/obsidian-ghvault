@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isExcluded, normalizePath, toRepoPath, toVaultPath } from "./path";
+import { isExcluded, isSafePath, normalizePath, toRepoPath, toVaultPath } from "./path";
 
 describe("normalizePath", () => {
 	it("replaces backslashes", () => {
@@ -81,5 +81,39 @@ describe("isExcluded", () => {
 	it("supports custom patterns", () => {
 		expect(isExcluded("secret/data.json", ["secret/**"])).toBe(true);
 		expect(isExcluded("public/data.json", ["secret/**"])).toBe(false);
+	});
+
+	it("excludes case-insensitively", () => {
+		expect(isExcluded(".Obsidian/workspace")).toBe(true);
+		expect(isExcluded(".TRASH/old.md")).toBe(true);
+		expect(isExcluded("GHVAULT.LOG")).toBe(true);
+	});
+});
+
+describe("isSafePath", () => {
+	it("allows normal paths", () => {
+		expect(isSafePath("notes/daily.md")).toBe(true);
+		expect(isSafePath("folder/sub/file.txt")).toBe(true);
+		expect(isSafePath("README.md")).toBe(true);
+	});
+
+	it("rejects path traversal with ..", () => {
+		expect(isSafePath("../etc/passwd")).toBe(false);
+		expect(isSafePath("notes/../../secret")).toBe(false);
+		expect(isSafePath("a/b/../../../c")).toBe(false);
+	});
+
+	it("rejects absolute paths", () => {
+		expect(isSafePath("/etc/passwd")).toBe(false);
+		expect(isSafePath("C:/Windows/system32")).toBe(false);
+	});
+
+	it("rejects empty paths", () => {
+		expect(isSafePath("")).toBe(false);
+	});
+
+	it("allows paths with dots in filenames", () => {
+		expect(isSafePath("file.test.md")).toBe(true);
+		expect(isSafePath(".hidden/file.md")).toBe(true);
 	});
 });

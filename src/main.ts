@@ -139,7 +139,7 @@ export default class GHVaultPlugin extends Plugin {
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logger?.error("Sync failed", { error: message });
-			new Notice(`GHVault: Sync failed — ${message}`);
+			new Notice(`GHVault: Sync failed — ${sanitizeErrorForUI(message)}`);
 			this.setStatus("error");
 		}
 	}
@@ -162,4 +162,11 @@ export default class GHVaultPlugin extends Plugin {
 		data.settings = this.settings;
 		await this.saveData(data);
 	}
+}
+
+function sanitizeErrorForUI(message: string): string {
+	return message.replace(
+		/ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g,
+		"[REDACTED]",
+	);
 }

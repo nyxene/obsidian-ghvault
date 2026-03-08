@@ -15,13 +15,24 @@ export function toVaultPath(repoPath: string, repoPrefix: string): string | null
 	return normalized.slice(prefix.length);
 }
 
+export function isSafePath(path: string): boolean {
+	const normalized = normalizePath(path);
+	if (!normalized) return false;
+	if (/^[a-zA-Z]:/.test(normalized) || path.startsWith("/")) return false;
+	const segments = normalized.split("/");
+	for (const seg of segments) {
+		if (seg === "..") return false;
+	}
+	return true;
+}
+
 export function isExcluded(
 	path: string,
 	patterns: ReadonlyArray<string> = EXCLUDED_PATTERNS,
 ): boolean {
-	const normalized = normalizePath(path);
+	const normalized = normalizePath(path).toLowerCase();
 	for (const pattern of patterns) {
-		if (matchPattern(normalized, pattern)) return true;
+		if (matchPattern(normalized, pattern.toLowerCase())) return true;
 	}
 	return false;
 }
