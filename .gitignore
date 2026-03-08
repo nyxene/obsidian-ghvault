@@ -33,6 +33,7 @@ Thumbs.db
 coverage/
 playwright-report/
 test-results/
+test-vault/
 
 # Logs
 *.log
