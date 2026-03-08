@@ -4,6 +4,7 @@ import type { GitHubRef, GitHubRepoInfo, GitHubTreeEntry } from "../types";
 import {
 	GitHubAuthError,
 	GitHubConflictError,
+	GitHubEmptyRepoError,
 	GitHubNotFoundError,
 	GitHubRateLimitError,
 } from "../types";
@@ -99,6 +100,49 @@ export class GitHubClient {
 		return data.map((b) => b.name);
 	}
 
+	async createFile(
+		path: string,
+		content: string,
+		message: string,
+		branch?: string,
+	): Promise<{ sha: string; commitSha: string }> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+
+		const url = `${BASE_URL}/repos/${this.owner}/${this.repo}/contents/${path}`;
+		this.logger.debug("GitHub REST createFile", { path, branch });
+
+		const body: Record<string, string> = {
+			message,
+			content: btoa(content),
+		};
+		if (branch) {
+			body.branch = branch;
+		}
+
+		let response: RequestUrlResponse;
+		try {
+			response = await requestUrl({
+				url,
+				method: "PUT",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+				body: JSON.stringify(body),
+			});
+		} catch (error: unknown) {
+			throw this.handleRequestError(error, path);
+		}
+
+		this.rateLimiter.updateFromHeaders(response.headers);
+		const data = response.json as {
+			content: { sha: string };
+			commit: { sha: string };
+		};
+		return { sha: data.content.sha, commitSha: data.commit.sha };
+	}
+
 	private async request<T>(path: string): Promise<T> {
 		this.rateLimiter.assertCanMakeRequest("rest");
 
@@ -126,6 +170,11 @@ export class GitHubClient {
 
 	private handleRequestError(error: unknown, path: string): Error {
 		const status = (error as { status?: number }).status;
+		this.logger.debug("handleRequestError", {
+			status,
+			path,
+			errorKeys: Object.keys(error as object),
+		});
 
 		if (status === 401) {
 			return new GitHubAuthError();
@@ -149,6 +198,11 @@ export class GitHubClient {
 		}
 
 		if (status === 409) {
+			const err = error as Record<string, unknown>;
+			const message = String(err.message ?? err.text ?? err.body ?? "");
+			if (message.toLowerCase().includes("empty") || path.includes("/git/ref/")) {
+				return new GitHubEmptyRepoError();
+			}
 			return new GitHubConflictError();
 		}
 

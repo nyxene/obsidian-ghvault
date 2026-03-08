@@ -1,5 +1,6 @@
 import type { GitHubClient } from "../github/client";
-import type { SHACacheEntry } from "../types";
+import type { GitHubRef, SHACacheEntry } from "../types";
+import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import type { Logger } from "../utils/logger";
 import { computeRemoteChanges } from "./comparator";
 import type { SyncStateManager } from "./state";
@@ -41,16 +42,44 @@ export class PullEngine {
 
 		this.logger.info("Pull started", { branch });
 
-		const ref = await this.client.getRef(branch);
+		let ref: GitHubRef;
+		try {
+			ref = await this.client.getRef(branch);
+		} catch (error: unknown) {
+			if (error instanceof GitHubEmptyRepoError) {
+				this.logger.info("Repository is empty — initializing");
+				const init = await this.client.createFile(
+					".ghvault",
+					"initialized",
+					"chore: initialize repository",
+					branch,
+				);
+				this.state.setHeadOid(init.commitSha);
+				this.state.setLastSyncedAt(Date.now());
+				await this.state.save();
+				return result;
+			}
+			throw error;
+		}
 		const commit = await this.client.getCommit(ref.sha);
-		const tree = await this.client.getTree(commit.treeSha, true);
 
-		if (tree.truncated) {
-			this.logger.warn("Tree response truncated — some files may be missed");
+		let treeEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+		try {
+			const tree = await this.client.getTree(commit.treeSha, true);
+			treeEntries = tree.entries;
+			if (tree.truncated) {
+				this.logger.warn("Tree response truncated — some files may be missed");
+			}
+		} catch (error: unknown) {
+			if (error instanceof GitHubNotFoundError) {
+				this.logger.info("Tree is empty (no files in repo)");
+			} else {
+				throw error;
+			}
 		}
 
 		const cache = this.state.getAllSHAs();
-		const changes = computeRemoteChanges(tree.entries, cache);
+		const changes = computeRemoteChanges(treeEntries, cache);
 
 		if (changes.length === 0) {
 			this.logger.info("Pull complete — no remote changes");

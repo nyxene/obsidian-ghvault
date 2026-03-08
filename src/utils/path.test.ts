@@ -69,6 +69,10 @@ describe("isExcluded", () => {
 		expect(isExcluded("ghvault.log")).toBe(true);
 	});
 
+	it("excludes .ghvault marker file", () => {
+		expect(isExcluded(".ghvault")).toBe(true);
+	});
+
 	it("does not exclude regular files", () => {
 		expect(isExcluded("notes/daily.md")).toBe(false);
 		expect(isExcluded("README.md")).toBe(false);
