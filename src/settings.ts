@@ -23,15 +23,16 @@ export class GHVaultSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("GitHub token")
 			.setDesc("Personal access token with repo scope")
-			.addText((text) =>
+			.addText((text) => {
+				text.inputEl.type = "password";
 				text
 					.setPlaceholder("ghp_...")
 					.setValue(this.settings.githubToken)
 					.onChange(async (value) => {
 						this.settings.githubToken = value;
 						await this.onSave(this.settings);
-					}),
-			);
+					});
+			});
 
 		new Setting(containerEl)
 			.setName("Repository owner")

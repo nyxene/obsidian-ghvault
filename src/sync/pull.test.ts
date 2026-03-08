@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
+import { GitHubEmptyRepoError } from "../types";
 import type { Logger } from "../utils/logger";
 import type { VaultAdapter } from "./pull";
 import { PullEngine } from "./pull";
@@ -205,5 +206,27 @@ describe("PullEngine", () => {
 		await engine.pull("main");
 
 		expect(client.getTree).toHaveBeenCalledWith("tree-sha", true);
+	});
+
+	it("initializes empty repo with .ghvault file", async () => {
+		const client = createMockClient();
+		vi.mocked(client.getRef).mockRejectedValue(new GitHubEmptyRepoError());
+		(client as unknown as Record<string, unknown>).createFile = vi
+			.fn()
+			.mockResolvedValue({ sha: "file-sha", commitSha: "init-commit-sha" });
+		const state = createMockState();
+		const { engine } = createEngine({ client, state });
+
+		const result = await engine.pull("main");
+
+		expect(
+			(client as unknown as { createFile: ReturnType<typeof vi.fn> }).createFile,
+		).toHaveBeenCalledWith(".ghvault", "initialized", "chore: initialize repository", "main");
+		expect(state.setHeadOid).toHaveBeenCalledWith("init-commit-sha");
+		expect(state.setLastSyncedAt).toHaveBeenCalledWith(expect.any(Number));
+		expect(state.save).toHaveBeenCalled();
+		expect(result.created).toEqual([]);
+		expect(result.modified).toEqual([]);
+		expect(result.deleted).toEqual([]);
 	});
 });

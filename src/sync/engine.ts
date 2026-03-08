@@ -65,6 +65,8 @@ export class SyncEngine {
 	private async executeSyncCycle(): Promise<SyncResult> {
 		this.logger.info("Sync started");
 
+		await this.state.load();
+
 		const pull = await this.pullEngine.pull(this.commitOptions.branch);
 
 		const localFiles = await this.vault.listFiles();

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	GitHubAuthError,
 	GitHubConflictError,
+	GitHubEmptyRepoError,
 	GitHubNotFoundError,
 	GitHubRateLimitError,
 } from "../types";
@@ -146,6 +147,11 @@ describe("GitHubClient", () => {
 		it("throws GitHubConflictError on 409", async () => {
 			mockError(409);
 			await expect(createClient().getRepoInfo()).rejects.toThrow(GitHubConflictError);
+		});
+
+		it("throws GitHubEmptyRepoError on 409 with empty message", async () => {
+			mockRequest.mockRejectedValue({ status: 409, message: "Git Repository is empty." });
+			await expect(createClient().getRef("main")).rejects.toThrow(GitHubEmptyRepoError);
 		});
 	});
 

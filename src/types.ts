@@ -107,6 +107,13 @@ export class GitHubConflictError extends Error {
 	}
 }
 
+export class GitHubEmptyRepoError extends Error {
+	constructor() {
+		super("Repository is empty. No commits yet.");
+		this.name = "GitHubEmptyRepoError";
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -115,6 +122,7 @@ export const EXCLUDED_PATTERNS: ReadonlyArray<string> = [
 	".obsidian/**",
 	".trash/**",
 	"ghvault.log",
+	".ghvault",
 ];
 
 export const LOG_FILE = "ghvault.log";
