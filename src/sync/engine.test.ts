@@ -22,6 +22,7 @@ function createMockState(cache: Record<string, unknown> = {}): SyncStateManager 
 	return {
 		getAllSHAs: vi.fn().mockReturnValue(cache),
 		getHeadOid: vi.fn().mockReturnValue("head"),
+		load: vi.fn().mockResolvedValue(undefined),
 	} as unknown as SyncStateManager;
 }
 
@@ -200,5 +201,14 @@ describe("SyncEngine", () => {
 
 		await expect(engine.sync()).rejects.toThrow("push failed");
 		expect(engine.isSyncing).toBe(false);
+	});
+
+	it("loads state from disk before sync", async () => {
+		const state = createMockState();
+		const { engine } = createEngine({ state });
+
+		await engine.sync();
+
+		expect(state.load).toHaveBeenCalled();
 	});
 });
