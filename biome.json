@@ -32,7 +32,7 @@
 	},
 	"overrides": [
 		{
-			"includes": ["**/src/main.ts", "**/commitlint.config.ts"],
+			"includes": ["**/src/main.ts", "**/commitlint.config.ts", "**/vitest.config.ts"],
 			"linter": {
 				"rules": {
 					"style": {
