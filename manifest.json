@@ -1,0 +1,9 @@
+{
+	"id": "ghvault",
+	"name": "GHVault",
+	"version": "0.0.0",
+	"minAppVersion": "1.5.0",
+	"description": "Bidirectional vault-GitHub sync via REST/GraphQL API. No git CLI. Mobile-first.",
+	"author": "nyxene",
+	"isDesktopOnly": false
+}

@@ -1,0 +1,48 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 2,
+		"lineWidth": 100
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"complexity": {
+				"noExtraBooleanCast": "error",
+				"noUselessTypeConstraint": "error"
+			},
+			"correctness": {
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error"
+			},
+			"style": {
+				"noDefaultExport": "error",
+				"useConst": "error",
+				"useImportType": "error"
+			},
+			"suspicious": {
+				"noExplicitAny": "error",
+				"noConsole": "error"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/src/main.ts", "**/commitlint.config.ts"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noDefaultExport": "off"
+					}
+				}
+			}
+		}
+	],
+	"files": {
+		"includes": ["**", "!**/node_modules", "!**/main.js", "!**/*.d.ts"]
+	}
+}

@@ -1,0 +1,37 @@
+{
+	"name": "obsidian-ghvault",
+	"version": "0.0.0",
+	"description": "Obsidian plugin for bidirectional vault-GitHub sync via REST/GraphQL API",
+	"type": "module",
+	"scripts": {
+		"build": "node esbuild.config.mjs production",
+		"dev": "node esbuild.config.mjs",
+		"lint": "biome check src/",
+		"format": "biome check --write src/",
+		"type-check": "tsc --noEmit",
+		"test": "vitest run --passWithNoTests",
+		"prepare": "husky"
+	},
+	"keywords": [
+		"obsidian",
+		"github",
+		"sync"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.6",
+		"@commitlint/cli": "^20.4.3",
+		"@commitlint/config-conventional": "^20.4.3",
+		"@types/node": "^25.3.5",
+		"esbuild": "^0.27.3",
+		"husky": "^9.1.7",
+		"lint-staged": "^16.3.2",
+		"obsidian": "^1.12.3",
+		"tslib": "^2.8.1",
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
+	},
+	"lint-staged": {
+		"*.{ts,json,md}": "biome check --write --no-errors-on-unmatched"
+	}
+}
