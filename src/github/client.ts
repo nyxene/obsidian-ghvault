@@ -8,6 +8,7 @@ import {
 	GitHubNotFoundError,
 	GitHubRateLimitError,
 } from "../types";
+import { toBase64 } from "../utils/base64";
 import type { Logger } from "../utils/logger";
 import type { RateLimiter } from "./rate-limit";
 
@@ -73,7 +74,7 @@ export class GitHubClient {
 	async getFileContent(path: string, ref?: string): Promise<FileContentResponse> {
 		const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
 		const data = await this.request<{ content: string; sha: string; size: number }>(
-			`/repos/${this.owner}/${this.repo}/contents/${path}${query}`,
+			`/repos/${this.owner}/${this.repo}/contents/${encodePath(path)}${query}`,
 		);
 		return { content: data.content, sha: data.sha, size: data.size };
 	}
@@ -108,12 +109,12 @@ export class GitHubClient {
 	): Promise<{ sha: string; commitSha: string }> {
 		this.rateLimiter.assertCanMakeRequest("rest");
 
-		const url = `${BASE_URL}/repos/${this.owner}/${this.repo}/contents/${path}`;
+		const url = `${BASE_URL}/repos/${this.owner}/${this.repo}/contents/${encodePath(path)}`;
 		this.logger.debug("GitHub REST createFile", { path, branch });
 
 		const body: Record<string, string> = {
 			message,
-			content: btoa(content),
+			content: toBase64(content),
 		};
 		if (branch) {
 			body.branch = branch;
@@ -128,6 +129,7 @@ export class GitHubClient {
 					Authorization: `Bearer ${this.token}`,
 					Accept: "application/vnd.github+json",
 					"X-GitHub-Api-Version": API_VERSION,
+					"Cache-Control": "no-cache",
 				},
 				body: JSON.stringify(body),
 			});
@@ -158,6 +160,7 @@ export class GitHubClient {
 					Authorization: `Bearer ${this.token}`,
 					Accept: "application/vnd.github+json",
 					"X-GitHub-Api-Version": API_VERSION,
+					"Cache-Control": "no-cache",
 				},
 			});
 		} catch (error: unknown) {
@@ -209,4 +212,8 @@ export class GitHubClient {
 		this.logger.error("GitHub API error", { status, path, error: String(error) });
 		return error instanceof Error ? error : new Error(String(error));
 	}
+}
+
+function encodePath(path: string): string {
+	return path.split("/").map(encodeURIComponent).join("/");
 }

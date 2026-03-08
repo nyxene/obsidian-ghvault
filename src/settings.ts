@@ -1,6 +1,14 @@
 import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
 import type { GHVaultSettings, LogLevel } from "./types";
 
+function sanitizeSlug(value: string): string {
+	return value.replace(/[^a-zA-Z0-9._-]/g, "");
+}
+
+function sanitizeBranch(value: string): string {
+	return value.replace(/[^a-zA-Z0-9._/-]/g, "");
+}
+
 export class GHVaultSettingTab extends PluginSettingTab {
 	private settings: GHVaultSettings;
 	private readonly onSave: (settings: GHVaultSettings) => Promise<void>;
@@ -34,6 +42,23 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					});
 			});
 
+		const warning = containerEl.createEl("div", {
+			cls: "ghvault-token-warning",
+		});
+		warning.style.padding = "8px 12px";
+		warning.style.marginTop = "4px";
+		warning.style.marginBottom = "16px";
+		warning.style.borderRadius = "4px";
+		warning.style.backgroundColor = "var(--background-modifier-error-rgb, rgba(255, 0, 0, 0.1))";
+		warning.style.border = "1px solid var(--text-error)";
+		warning.style.color = "var(--text-error)";
+		warning.style.fontSize = "12px";
+		warning.style.lineHeight = "1.4";
+		warning.setText(
+			"Token is stored unencrypted in your vault's plugin data. " +
+				"Do not share your vault folder. Use a fine-grained PAT with minimal permissions.",
+		);
+
 		new Setting(containerEl)
 			.setName("Repository owner")
 			.setDesc("GitHub username or organization")
@@ -42,7 +67,8 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.setPlaceholder("owner")
 					.setValue(this.settings.owner)
 					.onChange(async (value) => {
-						this.settings.owner = value;
+						this.settings.owner = sanitizeSlug(value);
+						text.setValue(this.settings.owner);
 						await this.onSave(this.settings);
 					}),
 			);
@@ -55,7 +81,8 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.setPlaceholder("my-vault")
 					.setValue(this.settings.repo)
 					.onChange(async (value) => {
-						this.settings.repo = value;
+						this.settings.repo = sanitizeSlug(value);
+						text.setValue(this.settings.repo);
 						await this.onSave(this.settings);
 					}),
 			);
@@ -68,7 +95,8 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.setPlaceholder("main")
 					.setValue(this.settings.branch)
 					.onChange(async (value) => {
-						this.settings.branch = value;
+						this.settings.branch = sanitizeBranch(value);
+						text.setValue(this.settings.branch);
 						await this.onSave(this.settings);
 					}),
 			);

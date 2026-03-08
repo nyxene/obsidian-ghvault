@@ -2,6 +2,14 @@ import type { App } from "obsidian";
 import type { LogLevel } from "../types";
 import { LOG_FILE } from "../types";
 
+const MAX_LOG_LINES = 5000;
+const TRIM_TO_LINES = 3000;
+const SECRET_PATTERN = /ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g;
+
+function sanitizeSecrets(text: string): string {
+	return text.replace(SECRET_PATTERN, "[REDACTED]");
+}
+
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	debug: 0,
 	info: 1,
@@ -24,6 +32,8 @@ export interface LoggerOptions {
 export class Logger {
 	private readonly app: App;
 	private minLevel: LogLevel;
+	private writeCount = 0;
+	private rotating = false;
 
 	constructor(options: LoggerOptions) {
 		this.app = options.app;
@@ -63,9 +73,30 @@ export class Logger {
 			entry.data = data;
 		}
 
-		const line = `${JSON.stringify(entry)}\n`;
-		this.app.vault.adapter.append(LOG_FILE, line).catch(() => {
-			// Silently ignore write failures to avoid recursive error loops
-		});
+		const line = sanitizeSecrets(JSON.stringify(entry));
+		this.app.vault.adapter.append(LOG_FILE, `${line}\n`).catch(() => {});
+
+		this.writeCount++;
+		if (this.writeCount >= MAX_LOG_LINES && !this.rotating) {
+			this.rotateLog();
+		}
+	}
+
+	private rotateLog(): void {
+		this.rotating = true;
+		this.app.vault.adapter
+			.read(LOG_FILE)
+			.then((content) => {
+				const lines = content.split("\n");
+				if (lines.length > MAX_LOG_LINES) {
+					const trimmed = lines.slice(lines.length - TRIM_TO_LINES).join("\n");
+					return this.app.vault.adapter.write(LOG_FILE, `${trimmed}\n`);
+				}
+			})
+			.catch(() => {})
+			.finally(() => {
+				this.writeCount = 0;
+				this.rotating = false;
+			});
 	}
 }

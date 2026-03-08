@@ -1,7 +1,11 @@
 import type { GitHubGraphQL } from "../github/graphql";
 import type { FileChange } from "../types";
+import { computeHash } from "../utils/hash";
 import type { Logger } from "../utils/logger";
+import { isSafePath } from "../utils/path";
 import type { SyncStateManager } from "./state";
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 export interface VaultReader {
 	readFile(path: string): Promise<string>;
@@ -52,17 +56,38 @@ export class PushEngine {
 
 		const additions = [];
 		const deletions = [];
+		const contentHashes = new Map<string, { hash: string; size: number }>();
 
 		for (const change of changes) {
+			if (!isSafePath(change.path)) {
+				this.logger.warn("Skipping unsafe path", { path: change.path });
+				continue;
+			}
+
 			if (change.type === "create" || change.type === "modify") {
 				const content = await this.vault.readFile(change.path);
+				const contentSize = new TextEncoder().encode(content).length;
+				if (contentSize > MAX_FILE_SIZE) {
+					this.logger.warn("Skipping oversized file", {
+						path: change.path,
+						size: contentSize,
+					});
+					continue;
+				}
 				const base64Content = encodeToBase64(content);
+				const hash = await computeHash(content);
 				additions.push({ path: change.path, base64Content });
+				contentHashes.set(change.path, { hash, size: contentSize });
 				result.pushed.push(change.path);
 			} else if (change.type === "delete") {
 				deletions.push({ path: change.path });
 				result.deleted.push(change.path);
 			}
+		}
+
+		if (additions.length === 0 && deletions.length === 0) {
+			this.logger.info("Push skipped — all changes filtered");
+			return result;
 		}
 
 		const headOid = this.state.getHeadOid();
@@ -80,11 +105,12 @@ export class PushEngine {
 
 		for (const change of changes) {
 			if (change.type === "create" || change.type === "modify") {
+				const info = contentHashes.get(change.path);
 				this.state.setSHA(change.path, {
 					remoteSha: "",
-					localContentHash: "",
+					localContentHash: info?.hash ?? "",
 					lastSyncedAt: Date.now(),
-					size: 0,
+					size: info?.size ?? 0,
 					isBinary: false,
 				});
 			} else if (change.type === "delete") {
