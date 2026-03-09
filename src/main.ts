@@ -24,11 +24,14 @@ export default class GHVaultPlugin extends Plugin {
 		this.logger = new Logger({ app: this.app, minLevel: this.settings.logLevel });
 
 		this.addSettingTab(
-			new GHVaultSettingTab(this.app, this, this.settings, async (settings) => {
-				this.settings = settings;
-				await this.saveSettings();
-				this.logger?.setLevel(settings.logLevel);
-				this.rebuildSyncEngine();
+			new GHVaultSettingTab(this.app, this, this.settings, {
+				onSave: async (settings) => {
+					this.settings = settings;
+					await this.saveSettings();
+					this.logger?.setLevel(settings.logLevel);
+					this.rebuildSyncEngine();
+				},
+				onTestConnection: () => this.testConnection(),
 			}),
 		);
 
@@ -109,6 +112,30 @@ export default class GHVaultPlugin extends Plugin {
 			logger,
 			commitOptions: { branch, owner, repo },
 		});
+	}
+
+	private async testConnection(): Promise<void> {
+		const { githubToken, owner, repo } = this.settings;
+		const logger = this.logger as Logger;
+		const rateLimiter = new RateLimiter();
+
+		const client = new GitHubClient({
+			token: githubToken,
+			owner,
+			repo,
+			logger,
+			rateLimiter,
+		});
+
+		try {
+			const info = await client.getRepoInfo();
+			const visibility = info.private ? "private" : "public";
+			new Notice(`GHVault: Connected — ${info.fullName} (${visibility})`);
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(`GHVault: Connection failed — ${sanitizeErrorForUI(message)}`);
+			throw error;
+		}
 	}
 
 	private async runSync(): Promise<void> {

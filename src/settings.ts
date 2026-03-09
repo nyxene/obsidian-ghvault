@@ -9,19 +9,19 @@ function sanitizeBranch(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._/-]/g, "");
 }
 
+export interface SettingTabCallbacks {
+	onSave: (settings: GHVaultSettings) => Promise<void>;
+	onTestConnection: () => Promise<void>;
+}
+
 export class GHVaultSettingTab extends PluginSettingTab {
 	private settings: GHVaultSettings;
-	private readonly onSave: (settings: GHVaultSettings) => Promise<void>;
+	private readonly callbacks: SettingTabCallbacks;
 
-	constructor(
-		app: App,
-		plugin: Plugin,
-		settings: GHVaultSettings,
-		onSave: (settings: GHVaultSettings) => Promise<void>,
-	) {
+	constructor(app: App, plugin: Plugin, settings: GHVaultSettings, callbacks: SettingTabCallbacks) {
 		super(app, plugin);
 		this.settings = settings;
-		this.onSave = onSave;
+		this.callbacks = callbacks;
 	}
 
 	display(): void {
@@ -38,7 +38,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.setValue(this.settings.githubToken)
 					.onChange(async (value) => {
 						this.settings.githubToken = value;
-						await this.onSave(this.settings);
+						await this.callbacks.onSave(this.settings);
 					});
 			});
 
@@ -69,7 +69,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.settings.owner = sanitizeSlug(value);
 						text.setValue(this.settings.owner);
-						await this.onSave(this.settings);
+						await this.callbacks.onSave(this.settings);
 					}),
 			);
 
@@ -83,7 +83,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.settings.repo = sanitizeSlug(value);
 						text.setValue(this.settings.repo);
-						await this.onSave(this.settings);
+						await this.callbacks.onSave(this.settings);
 					}),
 			);
 
@@ -97,9 +97,33 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.settings.branch = sanitizeBranch(value);
 						text.setValue(this.settings.branch);
-						await this.onSave(this.settings);
+						await this.callbacks.onSave(this.settings);
 					}),
 			);
+
+		new Setting(containerEl)
+			.setName("Test connection")
+			.setDesc("Verify token and repository access")
+			.addButton((button) => {
+				button.setButtonText("Test").onClick(async () => {
+					const { githubToken, owner, repo } = this.settings;
+					if (!githubToken || !owner || !repo) {
+						button.setButtonText("Fill settings first");
+						setTimeout(() => button.setButtonText("Test"), 2000);
+						return;
+					}
+					button.setButtonText("Testing...");
+					button.setDisabled(true);
+					try {
+						await this.callbacks.onTestConnection();
+						button.setButtonText("Connected ✓");
+					} catch {
+						button.setButtonText("Failed ✗");
+					}
+					button.setDisabled(false);
+					setTimeout(() => button.setButtonText("Test"), 3000);
+				});
+			});
 
 		new Setting(containerEl)
 			.setName("Log level")
@@ -115,7 +139,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.setValue(this.settings.logLevel)
 					.onChange(async (value) => {
 						this.settings.logLevel = value as LogLevel;
-						await this.onSave(this.settings);
+						await this.callbacks.onSave(this.settings);
 					}),
 			);
 	}
