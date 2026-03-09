@@ -192,6 +192,100 @@ describe("PushEngine", () => {
 		);
 	});
 
+	it("skips unsafe paths", async () => {
+		const graphql = createMockGraphQL();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PushEngine({ graphql, state, vault, logger });
+
+		const changes: FileChange[] = [
+			{ path: "../etc/passwd", type: "create" },
+			{ path: "good.md", type: "create" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toEqual(["good.md"]);
+		expect(logger.warn).toHaveBeenCalledWith("Skipping unsafe path", {
+			path: "../etc/passwd",
+		});
+		expect(graphql.createCommit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				additions: [expect.objectContaining({ path: "good.md" })],
+			}),
+		);
+	});
+
+	it("skips oversized files (>50MB)", async () => {
+		const graphql = createMockGraphQL();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const bigContent = "x".repeat(51 * 1024 * 1024);
+		vi.mocked(vault.readFile).mockImplementation((path: string) => {
+			if (path === "huge.bin") return Promise.resolve(bigContent);
+			return Promise.resolve(`content of ${path}`);
+		});
+		const engine = new PushEngine({ graphql, state, vault, logger });
+
+		const changes: FileChange[] = [
+			{ path: "huge.bin", type: "create" },
+			{ path: "small.md", type: "create" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toEqual(["small.md"]);
+		expect(logger.warn).toHaveBeenCalledWith("Skipping oversized file", {
+			path: "huge.bin",
+			size: expect.any(Number),
+		});
+	});
+
+	it("returns early when all changes are filtered", async () => {
+		const graphql = createMockGraphQL();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PushEngine({ graphql, state, vault, logger });
+
+		const changes: FileChange[] = [
+			{ path: "../etc/passwd", type: "create" },
+			{ path: "/absolute/path", type: "modify" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toEqual([]);
+		expect(result.deleted).toEqual([]);
+		expect(result.oid).toBe("");
+		expect(graphql.createCommit).not.toHaveBeenCalled();
+		expect(logger.info).toHaveBeenCalledWith("Push skipped — all changes filtered");
+	});
+
+	it("does not update state for filtered files", async () => {
+		const graphql = createMockGraphQL();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const bigContent = "x".repeat(51 * 1024 * 1024);
+		vi.mocked(vault.readFile).mockImplementation((path: string) => {
+			if (path === "huge.bin") return Promise.resolve(bigContent);
+			return Promise.resolve(`content of ${path}`);
+		});
+		const engine = new PushEngine({ graphql, state, vault, logger });
+
+		const changes: FileChange[] = [
+			{ path: "../etc/passwd", type: "create" },
+			{ path: "huge.bin", type: "modify" },
+			{ path: "good.md", type: "create" },
+		];
+		await engine.push(changes, commitOptions);
+
+		expect(state.setSHA).toHaveBeenCalledTimes(1);
+		expect(state.setSHA).toHaveBeenCalledWith("good.md", expect.any(Object));
+		expect(state.setSHA).not.toHaveBeenCalledWith("../etc/passwd", expect.any(Object));
+		expect(state.setSHA).not.toHaveBeenCalledWith("huge.bin", expect.any(Object));
+	});
+
 	it("encodes file content to base64", async () => {
 		const graphql = createMockGraphQL();
 		const vault = createMockVault();
