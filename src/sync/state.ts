@@ -1,5 +1,7 @@
 import type { SHACacheEntry, SyncState } from "../types";
 
+const SHA_HEX_PATTERN = /^[0-9a-f]{40}$/;
+
 const EMPTY_STATE: SyncState = {
 	lastRemoteHeadSha: "",
 	lastSyncedAt: 0,
@@ -33,7 +35,11 @@ export class SyncStateManager {
 				}
 			}
 			this.state = {
-				lastRemoteHeadSha: typeof raw.lastRemoteHeadSha === "string" ? raw.lastRemoteHeadSha : "",
+				lastRemoteHeadSha:
+					typeof raw.lastRemoteHeadSha === "string" &&
+					(raw.lastRemoteHeadSha === "" || SHA_HEX_PATTERN.test(raw.lastRemoteHeadSha))
+						? raw.lastRemoteHeadSha
+						: "",
 				lastSyncedAt: typeof raw.lastSyncedAt === "number" ? raw.lastSyncedAt : 0,
 				cache: validCache,
 			};

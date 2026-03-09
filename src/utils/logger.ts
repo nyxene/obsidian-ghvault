@@ -1,10 +1,11 @@
 import type { App } from "obsidian";
 import type { LogLevel } from "../types";
-import { LOG_FILE } from "../types";
+import { LOG_FILE, VALID_LOG_LEVELS } from "../types";
 
 const MAX_LOG_LINES = 5000;
 const TRIM_TO_LINES = 3000;
-const SECRET_PATTERN = /ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g;
+const SECRET_PATTERN =
+	/ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 function sanitizeSecrets(text: string): string {
 	return text.replace(SECRET_PATTERN, "[REDACTED]");
@@ -34,13 +35,28 @@ export class Logger {
 	private minLevel: LogLevel;
 	private writeCount = 0;
 	private rotating = false;
+	private writeQueue: string[] = [];
 
 	constructor(options: LoggerOptions) {
 		this.app = options.app;
 		this.minLevel = options.minLevel;
 	}
 
+	async init(): Promise<void> {
+		try {
+			const content = await this.app.vault.adapter.read(LOG_FILE);
+			const lineCount = content.split("\n").length;
+			this.writeCount = lineCount;
+			if (lineCount > MAX_LOG_LINES) {
+				this.rotateLog();
+			}
+		} catch {
+			// Log file does not exist yet
+		}
+	}
+
 	setLevel(level: LogLevel): void {
+		if (!VALID_LOG_LEVELS.includes(level)) return;
 		this.minLevel = level;
 	}
 
@@ -61,7 +77,8 @@ export class Logger {
 	}
 
 	private write(level: LogLevel, message: string, data?: unknown): void {
-		if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[this.minLevel]) return;
+		const priority = LEVEL_PRIORITY[level];
+		if (priority === undefined || priority < LEVEL_PRIORITY[this.minLevel]) return;
 
 		const entry: LogEntry = {
 			timestamp: new Date().toISOString(),
@@ -74,10 +91,16 @@ export class Logger {
 		}
 
 		const line = sanitizeSecrets(JSON.stringify(entry));
+
+		if (this.rotating) {
+			this.writeQueue.push(line);
+			return;
+		}
+
 		this.app.vault.adapter.append(LOG_FILE, `${line}\n`).catch(() => {});
 
 		this.writeCount++;
-		if (this.writeCount >= MAX_LOG_LINES && !this.rotating) {
+		if (this.writeCount >= MAX_LOG_LINES) {
 			this.rotateLog();
 		}
 	}
@@ -95,8 +118,14 @@ export class Logger {
 			})
 			.catch(() => {})
 			.finally(() => {
-				this.writeCount = 0;
 				this.rotating = false;
+				this.writeCount = 0;
+				if (this.writeQueue.length > 0) {
+					const queued = this.writeQueue.join("\n");
+					this.writeQueue = [];
+					this.app.vault.adapter.append(LOG_FILE, `${queued}\n`).catch(() => {});
+					this.writeCount = queued.split("\n").length;
+				}
 			});
 	}
 }

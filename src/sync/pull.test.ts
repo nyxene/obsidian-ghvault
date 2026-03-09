@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import { GitHubEmptyRepoError } from "../types";
+import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import type { VaultAdapter } from "./pull";
 import { PullEngine } from "./pull";
 import type { SyncStateManager } from "./state";
+
+vi.mock("../utils/hash", () => ({
+	computeGitBlobSha: vi.fn(),
+}));
 
 function createMockClient(
 	treeEntries: Array<{ path: string; sha: string; size?: number }> = [],
@@ -24,9 +29,11 @@ function createMockClient(
 		}),
 		getFileContent: vi.fn().mockImplementation((path: string) => {
 			const entry = treeEntries.find((e) => e.path === path);
+			const sha = entry?.sha ?? "unknown-sha";
+			vi.mocked(computeGitBlobSha).mockResolvedValueOnce(sha);
 			return Promise.resolve({
 				content: btoa(`content of ${path}`),
-				sha: entry?.sha ?? "unknown-sha",
+				sha,
 				size: entry?.size ?? 100,
 			});
 		}),
@@ -174,6 +181,7 @@ describe("PullEngine", () => {
 		]);
 		vi.mocked(client.getFileContent).mockImplementation((path: string) => {
 			if (path === "fail.md") return Promise.reject(new Error("network error"));
+			vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-ok");
 			return Promise.resolve({ content: btoa("ok"), sha: "sha-ok", size: 2 });
 		});
 		const state = createMockState({});
