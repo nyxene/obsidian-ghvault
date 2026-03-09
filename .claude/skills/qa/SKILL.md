@@ -1,3 +1,8 @@
+---
+description: Run comprehensive QA analysis (coverage, test quality, performance, user scenarios, e2e)
+argument-hint: "[module: sync | github | utils | ui | settings | main | types]"
+---
+
 Launch a dedicated QA agent to perform comprehensive testing analysis.
 
 **Scope:** $ARGUMENTS (empty = full `src/`). Resolve module names to directories: `sync` → `src/sync/**`, `github` → `src/github/**`, `utils` → `src/utils/**`, `ui` → `src/ui/**`, `settings` → `src/settings.ts`, `main` → `src/main.ts`, `types` → `src/types.ts`.

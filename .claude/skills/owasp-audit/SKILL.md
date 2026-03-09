@@ -1,3 +1,8 @@
+---
+description: Perform full OWASP Top 10 security audit of the codebase
+disable-model-invocation: true
+---
+
 Launch a dedicated security agent to perform a full OWASP Top 10 audit of the codebase.
 
 The agent MUST:
