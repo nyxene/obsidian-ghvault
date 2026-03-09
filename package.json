@@ -11,6 +11,7 @@
 		"type-check": "tsc --noEmit",
 		"test": "vitest run --passWithNoTests",
 		"test:coverage": "vitest run --passWithNoTests --coverage",
+		"test:bench": "vitest bench",
 		"prepare": "husky"
 	},
 	"keywords": [
