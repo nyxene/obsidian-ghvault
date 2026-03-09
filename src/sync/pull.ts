@@ -1,6 +1,7 @@
 import type { GitHubClient } from "../github/client";
-import type { GitHubRef, SHACacheEntry } from "../types";
+import type { FileChange, GitHubRef, SHACacheEntry } from "../types";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
+import { pMap } from "../utils/concurrency";
 import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { isSafePath } from "../utils/path";
@@ -27,6 +28,7 @@ export interface PullEngineOptions {
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const PULL_CONCURRENCY = 8;
 
 export class PullEngine {
 	private readonly client: GitHubClient;
@@ -102,6 +104,9 @@ export class PullEngine {
 
 		this.logger.info("Remote changes detected", { count: changes.length });
 
+		// Separate deletes (no HTTP needed) from downloads (create/modify)
+		const downloads: FileChange[] = [];
+		const deletes: FileChange[] = [];
 		for (const change of changes) {
 			if (!isSafePath(change.path)) {
 				this.logger.warn("Skipping unsafe path from remote", { path: change.path });
@@ -123,8 +128,18 @@ export class PullEngine {
 				continue;
 			}
 
-			try {
-				if (change.type === "create" || change.type === "modify") {
+			if (change.type === "delete") {
+				deletes.push(change);
+			} else {
+				downloads.push(change);
+			}
+		}
+
+		// Process downloads in parallel with controlled concurrency
+		await pMap(
+			downloads,
+			async (change) => {
+				try {
 					const file = await this.client.getFileContent(change.path, branch);
 					const rawBytes = decodeBase64ToBytes(file.content);
 
@@ -139,7 +154,7 @@ export class PullEngine {
 							path: change.path,
 							error: "SHA integrity check failed — content may be tampered",
 						});
-						continue;
+						return;
 					}
 
 					const content = new TextDecoder().decode(rawBytes);
@@ -159,11 +174,21 @@ export class PullEngine {
 					} else {
 						result.modified.push(change.path);
 					}
-				} else if (change.type === "delete") {
-					await this.vault.deleteFile(change.path);
-					this.state.deleteSHA(change.path);
-					result.deleted.push(change.path);
+				} catch (error: unknown) {
+					const message = error instanceof Error ? error.message : String(error);
+					this.logger.error("Pull failed for file", { path: change.path, error: message });
+					result.errors.push({ path: change.path, error: message });
 				}
+			},
+			PULL_CONCURRENCY,
+		);
+
+		// Process deletes sequentially (fast, no HTTP)
+		for (const change of deletes) {
+			try {
+				await this.vault.deleteFile(change.path);
+				this.state.deleteSHA(change.path);
+				result.deleted.push(change.path);
 			} catch (error: unknown) {
 				const message = error instanceof Error ? error.message : String(error);
 				this.logger.error("Pull failed for file", { path: change.path, error: message });
