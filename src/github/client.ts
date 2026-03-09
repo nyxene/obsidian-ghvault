@@ -76,6 +76,13 @@ export class GitHubClient {
 		const data = await this.request<{ content: string; sha: string; size: number }>(
 			`/repos/${this.owner}/${this.repo}/contents/${encodePath(path)}${query}`,
 		);
+		if (
+			typeof data.content !== "string" ||
+			typeof data.sha !== "string" ||
+			typeof data.size !== "number"
+		) {
+			throw new Error(`Invalid file content response for ${path}`);
+		}
 		return { content: data.content, sha: data.sha, size: data.size };
 	}
 
@@ -168,16 +175,16 @@ export class GitHubClient {
 		}
 
 		this.rateLimiter.updateFromHeaders(response.headers);
-		return response.json as T;
+		const json = response.json;
+		if (json === null || json === undefined) {
+			throw new Error(`Invalid API response: expected JSON for ${path}`);
+		}
+		return json as T;
 	}
 
 	private handleRequestError(error: unknown, path: string): Error {
 		const status = (error as { status?: number }).status;
-		this.logger.debug("handleRequestError", {
-			status,
-			path,
-			errorKeys: Object.keys(error as object),
-		});
+		this.logger.debug("handleRequestError", { status, path });
 
 		if (status === 401) {
 			return new GitHubAuthError();

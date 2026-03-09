@@ -16,6 +16,7 @@ export function toVaultPath(repoPath: string, repoPrefix: string): string | null
 }
 
 export function isSafePath(path: string): boolean {
+	if (path.includes("\0")) return false;
 	const normalized = normalizePath(path);
 	if (!normalized) return false;
 	if (/^[a-zA-Z]:/.test(normalized) || path.startsWith("/")) return false;
@@ -48,6 +49,13 @@ function matchPattern(path: string, pattern: string): boolean {
 	if (pattern.endsWith("/**")) {
 		const prefix = pattern.slice(0, -3);
 		return path === prefix || path.startsWith(`${prefix}/`);
+	}
+	if (pattern.startsWith("**/")) {
+		const suffix = pattern.slice(3);
+		return path === suffix || path.endsWith(`/${suffix}`);
+	}
+	if (pattern.startsWith("*.")) {
+		return path.endsWith(pattern.slice(1));
 	}
 	return path === pattern;
 }

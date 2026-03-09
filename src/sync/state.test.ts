@@ -40,9 +40,10 @@ describe("SyncStateManager", () => {
 		});
 
 		it("restores state from existing data", async () => {
+			const validSha = "a".repeat(40);
 			const storage = createMockStorage({
 				syncState: {
-					lastRemoteHeadSha: "head-oid",
+					lastRemoteHeadSha: validSha,
 					lastSyncedAt: 5000,
 					cache: { "file.md": sampleEntry },
 				},
@@ -51,7 +52,7 @@ describe("SyncStateManager", () => {
 
 			await manager.load();
 
-			expect(manager.getHeadOid()).toBe("head-oid");
+			expect(manager.getHeadOid()).toBe(validSha);
 			expect(manager.getLastSyncedAt()).toBe(5000);
 			expect(manager.getSHA("file.md")).toEqual(sampleEntry);
 		});

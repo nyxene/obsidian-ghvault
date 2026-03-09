@@ -8,20 +8,24 @@ import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
-import type { GHVaultSettings } from "./types";
-import { DEFAULT_SETTINGS } from "./types";
+import type { GHVaultSettings, LogLevel } from "./types";
+import { DEFAULT_SETTINGS, VALID_LOG_LEVELS } from "./types";
 import { Logger } from "./utils/logger";
 
 export default class GHVaultPlugin extends Plugin {
+	private static readonly SYNC_COOLDOWN_MS = 5000;
+
 	private settings: GHVaultSettings = { ...DEFAULT_SETTINGS };
 	private syncEngine: SyncEngine | null = null;
 	private statusBarEl: HTMLElement | null = null;
 	private logger: Logger | null = null;
+	private lastSyncAt = 0;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
 		this.logger = new Logger({ app: this.app, minLevel: this.settings.logLevel });
+		await this.logger.init();
 
 		this.addSettingTab(
 			new GHVaultSettingTab(this.app, this, this.settings, {
@@ -149,6 +153,13 @@ export default class GHVaultPlugin extends Plugin {
 			return;
 		}
 
+		const now = Date.now();
+		if (now - this.lastSyncAt < GHVaultPlugin.SYNC_COOLDOWN_MS) {
+			new Notice("GHVault: Please wait before syncing again");
+			return;
+		}
+		this.lastSyncAt = now;
+
 		this.setStatus("syncing...");
 		try {
 			const result = await this.syncEngine.sync();
@@ -180,7 +191,11 @@ export default class GHVaultPlugin extends Plugin {
 	private async loadSettings(): Promise<void> {
 		const data = await this.loadData();
 		if (data?.settings) {
-			this.settings = { ...DEFAULT_SETTINGS, ...data.settings };
+			const raw = data.settings as Record<string, unknown>;
+			this.settings = { ...DEFAULT_SETTINGS, ...raw };
+			if (!VALID_LOG_LEVELS.includes(this.settings.logLevel as LogLevel)) {
+				this.settings.logLevel = DEFAULT_SETTINGS.logLevel;
+			}
 		}
 	}
 

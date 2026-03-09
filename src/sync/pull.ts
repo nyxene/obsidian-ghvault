@@ -1,6 +1,7 @@
 import type { GitHubClient } from "../github/client";
 import type { GitHubRef, SHACacheEntry } from "../types";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
+import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { isSafePath } from "../utils/path";
 import { computeRemoteChanges } from "./comparator";
@@ -125,7 +126,23 @@ export class PullEngine {
 			try {
 				if (change.type === "create" || change.type === "modify") {
 					const file = await this.client.getFileContent(change.path, branch);
-					const content = decodeBase64Content(file.content);
+					const rawBytes = decodeBase64ToBytes(file.content);
+
+					const blobSha = await computeGitBlobSha(rawBytes);
+					if (blobSha !== file.sha) {
+						this.logger.error("SHA integrity check failed", {
+							path: change.path,
+							expected: file.sha,
+							actual: blobSha,
+						});
+						result.errors.push({
+							path: change.path,
+							error: "SHA integrity check failed — content may be tampered",
+						});
+						continue;
+					}
+
+					const content = new TextDecoder().decode(rawBytes);
 					await this.vault.writeFile(change.path, content);
 
 					const entry: SHACacheEntry = {
@@ -189,8 +206,7 @@ export class PullEngine {
 	}
 }
 
-function decodeBase64Content(encoded: string): string {
+function decodeBase64ToBytes(encoded: string): Uint8Array {
 	const cleaned = encoded.replace(/\n/g, "");
-	const bytes = Uint8Array.from(atob(cleaned), (c) => c.charCodeAt(0));
-	return new TextDecoder().decode(bytes);
+	return Uint8Array.from(atob(cleaned), (c) => c.charCodeAt(0));
 }

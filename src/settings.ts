@@ -1,5 +1,6 @@
 import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
 import type { GHVaultSettings, LogLevel } from "./types";
+import { VALID_LOG_LEVELS } from "./types";
 
 function sanitizeSlug(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._-]/g, "");
@@ -138,8 +139,10 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					})
 					.setValue(this.settings.logLevel)
 					.onChange(async (value) => {
-						this.settings.logLevel = value as LogLevel;
-						await this.callbacks.onSave(this.settings);
+						if (VALID_LOG_LEVELS.includes(value as LogLevel)) {
+							this.settings.logLevel = value as LogLevel;
+							await this.callbacks.onSave(this.settings);
+						}
 					}),
 			);
 	}

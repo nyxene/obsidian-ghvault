@@ -12,6 +12,8 @@ export interface GHVaultSettings {
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+export const VALID_LOG_LEVELS: ReadonlyArray<LogLevel> = ["debug", "info", "warn", "error"];
+
 // ---------------------------------------------------------------------------
 // Sync state
 // ---------------------------------------------------------------------------

@@ -175,7 +175,11 @@ export class GitHubGraphQL {
 			return new GitHubConflictError("HEAD has changed since last fetch. Pull and retry.");
 		}
 
-		this.logger.error("GraphQL errors", { errors });
+		this.logger.error("GraphQL errors", {
+			count: errors.length,
+			type: first.type,
+			message: first.message,
+		});
 		return new Error(`GraphQL error: ${first.message}`);
 	}
 }
