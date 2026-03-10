@@ -1,7 +1,12 @@
 import type { RequestUrlParam } from "obsidian";
 import { requestUrl } from "obsidian";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GitHubAuthError, GitHubConflictError, GitHubRateLimitError } from "../types";
+import {
+	GitHubAuthError,
+	GitHubConflictError,
+	GitHubRateLimitError,
+	GitHubTimeoutError,
+} from "../types";
 import type { Logger } from "../utils/logger";
 import type { FileAddition } from "./graphql";
 import { chunkAdditions, GitHubGraphQL } from "./graphql";
@@ -156,6 +161,25 @@ describe("GitHubGraphQL", () => {
 
 			// Second call uses OID from first
 			expect(secondBody.variables.input.expectedHeadOid).toBe("oid-1");
+		});
+	});
+
+	describe("timeout", () => {
+		it("throws GitHubTimeoutError when GraphQL request hangs", async () => {
+			vi.useFakeTimers();
+			mockRequest.mockReturnValue(new Promise(() => {}) as ReturnType<typeof requestUrl>);
+
+			const promise = createGraphQL().createCommit({
+				...baseOptions,
+				additions: [{ path: "f.md", base64Content: "x" }],
+				deletions: [],
+			});
+
+			vi.advanceTimersByTime(30_000);
+
+			await expect(promise).rejects.toThrow(GitHubTimeoutError);
+			await expect(promise).rejects.toThrow("Request timed out after 30s");
+			vi.useRealTimers();
 		});
 	});
 

@@ -121,6 +121,13 @@ export class GitHubEmptyRepoError extends Error {
 	}
 }
 
+export class GitHubTimeoutError extends Error {
+	constructor(timeoutMs: number) {
+		super(`Request timed out after ${timeoutMs / 1000}s`);
+		this.name = "GitHubTimeoutError";
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
