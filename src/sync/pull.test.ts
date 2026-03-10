@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
-import { GitHubEmptyRepoError } from "../types";
+import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import type { VaultAdapter } from "./pull";
@@ -316,5 +316,106 @@ describe("PullEngine", () => {
 		expect(result.created).toEqual([]);
 		expect(result.modified).toEqual([]);
 		expect(result.deleted).toEqual([]);
+	});
+
+	it("logs warning when tree response is truncated", async () => {
+		const client = createMockClient([{ path: "file.md", sha: "sha-1" }]);
+		vi.mocked(client.getTree).mockResolvedValue({
+			entries: [{ path: "file.md", sha: "sha-1", mode: "100644", type: "blob", size: 100 }],
+			truncated: true,
+		});
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger });
+
+		await engine.pull("main");
+
+		expect(logger.warn).toHaveBeenCalledWith("Tree response truncated — some files may be missed");
+	});
+
+	it("handles GitHubNotFoundError from getTree as empty tree during pull", async () => {
+		const client = createMockClient();
+		vi.mocked(client.getTree).mockRejectedValue(new GitHubNotFoundError("tree-sha"));
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger });
+
+		const result = await engine.pull("main");
+
+		expect(logger.info).toHaveBeenCalledWith("Tree is empty (no files in repo)");
+		expect(result.created).toEqual([]);
+		expect(result.errors).toEqual([]);
+		expect(state.setHeadOid).toHaveBeenCalledWith("head-sha");
+		expect(state.save).toHaveBeenCalled();
+	});
+
+	it("rethrows non-NotFoundError from getTree during pull", async () => {
+		const client = createMockClient();
+		vi.mocked(client.getTree).mockRejectedValue(new Error("network timeout"));
+		const { engine } = createEngine({ client });
+
+		await expect(engine.pull("main")).rejects.toThrow("network timeout");
+	});
+
+	describe("updateCacheFromCommit", () => {
+		it("updates cache entries from commit tree", async () => {
+			const client = createMockClient([
+				{ path: "a.md", sha: "new-sha-a" },
+				{ path: "b.md", sha: "new-sha-b" },
+			]);
+			const state = createMockState({
+				"a.md": { remoteSha: "old-sha-a" },
+			});
+			(state as unknown as Record<string, unknown>).getSHA = vi.fn((path: string) => {
+				if (path === "a.md") {
+					return {
+						remoteSha: "old-sha-a",
+						localContentHash: "",
+						lastSyncedAt: 1000,
+						size: 100,
+						isBinary: false,
+					};
+				}
+				return undefined;
+			});
+			const { engine } = createEngine({ client, state });
+
+			await engine.updateCacheFromCommit("commit-oid");
+
+			expect(client.getCommit).toHaveBeenCalledWith("commit-oid");
+			expect(client.getTree).toHaveBeenCalledWith("tree-sha", true);
+			expect(state.setSHA).toHaveBeenCalledWith(
+				"a.md",
+				expect.objectContaining({ remoteSha: "new-sha-a" }),
+			);
+			// b.md is not in cache, so setSHA should not be called for it
+			expect(state.setSHA).not.toHaveBeenCalledWith("b.md", expect.anything());
+			expect(state.save).toHaveBeenCalled();
+		});
+
+		it("silently handles GitHubNotFoundError from getTree", async () => {
+			const client = createMockClient();
+			vi.mocked(client.getTree).mockRejectedValue(new GitHubNotFoundError("tree-sha"));
+			const state = createMockState({ "a.md": { remoteSha: "sha-a" } });
+			const { engine } = createEngine({ client, state });
+
+			// Should not throw
+			await engine.updateCacheFromCommit("commit-oid");
+
+			// Should still save (with no setSHA calls)
+			expect(state.setSHA).not.toHaveBeenCalled();
+			expect(state.save).toHaveBeenCalled();
+		});
+
+		it("rethrows non-NotFoundError from getTree", async () => {
+			const client = createMockClient();
+			vi.mocked(client.getTree).mockRejectedValue(new Error("server error"));
+			const state = createMockState();
+			const { engine } = createEngine({ client, state });
+
+			await expect(engine.updateCacheFromCommit("commit-oid")).rejects.toThrow("server error");
+		});
 	});
 });
