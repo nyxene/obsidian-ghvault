@@ -99,6 +99,21 @@ describe("Logger", () => {
 		expect(line).toContain("[REDACTED]");
 	});
 
+	it("redacts all GitHub token prefixes (gho_, ghu_, ghs_, ghx_)", () => {
+		const prefixes = ["gho_", "ghu_", "ghs_", "ghx_"];
+		for (const prefix of prefixes) {
+			const token = `${prefix}${"a".repeat(20)}`;
+			logger.info(`token is ${token}`);
+		}
+
+		const append = app.vault.adapter.append as ReturnType<typeof vi.fn>;
+		for (let i = 0; i < prefixes.length; i++) {
+			const line = append.mock.calls[i][1] as string;
+			expect(line).not.toContain(prefixes[i]);
+			expect(line).toContain("[REDACTED]");
+		}
+	});
+
 	it("redacts Bearer tokens from log output", () => {
 		logger.error("auth failed", { header: "Bearer ghp_abc123def456ghi789jkl012" });
 

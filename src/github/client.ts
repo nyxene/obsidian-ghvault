@@ -50,31 +50,39 @@ export class GitHubClient {
 	}
 
 	async getRef(branch: string): Promise<GitHubRef> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
 		const data = await this.request<{ ref: string; object: { sha: string } }>(
-			`/repos/${this.owner}/${this.repo}/git/ref/heads/${branch}`,
+			`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
 		);
 		return { ref: data.ref, sha: data.object.sha };
 	}
 
 	async getCommit(sha: string): Promise<{ sha: string; treeSha: string }> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
 		const data = await this.request<{ sha: string; tree: { sha: string } }>(
-			`/repos/${this.owner}/${this.repo}/git/commits/${sha}`,
+			`/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`,
 		);
 		return { sha: data.sha, treeSha: data.tree.sha };
 	}
 
 	async getTree(sha: string, recursive = false): Promise<TreeResponse> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
 		const query = recursive ? "?recursive=1" : "";
 		const data = await this.request<{ tree: GitHubTreeEntry[]; truncated: boolean }>(
-			`/repos/${this.owner}/${this.repo}/git/trees/${sha}${query}`,
+			`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(sha)}${query}`,
 		);
 		return { entries: data.tree, truncated: data.truncated };
 	}
 
 	async getFileContent(path: string, ref?: string): Promise<FileContentResponse> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
 		const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
 		const data = await this.request<{ content: string; sha: string; size: number }>(
-			`/repos/${this.owner}/${this.repo}/contents/${encodePath(path)}${query}`,
+			`/repos/${owner}/${repo}/contents/${encodePath(path)}${query}`,
 		);
 		if (
 			typeof data.content !== "string" ||
@@ -87,12 +95,14 @@ export class GitHubClient {
 	}
 
 	async getRepoInfo(): Promise<GitHubRepoInfo> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
 		const data = await this.request<{
 			name: string;
 			full_name: string;
 			default_branch: string;
 			private: boolean;
-		}>(`/repos/${this.owner}/${this.repo}`);
+		}>(`/repos/${owner}/${repo}`);
 		return {
 			name: data.name,
 			fullName: data.full_name,
@@ -102,9 +112,9 @@ export class GitHubClient {
 	}
 
 	async listBranches(): Promise<string[]> {
-		const data = await this.request<Array<{ name: string }>>(
-			`/repos/${this.owner}/${this.repo}/branches`,
-		);
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const data = await this.request<Array<{ name: string }>>(`/repos/${owner}/${repo}/branches`);
 		return data.map((b) => b.name);
 	}
 
@@ -116,7 +126,9 @@ export class GitHubClient {
 	): Promise<{ sha: string; commitSha: string }> {
 		this.rateLimiter.assertCanMakeRequest("rest");
 
-		const url = `${BASE_URL}/repos/${this.owner}/${this.repo}/contents/${encodePath(path)}`;
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const url = `${BASE_URL}/repos/${owner}/${repo}/contents/${encodePath(path)}`;
 		this.logger.debug("GitHub REST createFile", { path, branch });
 
 		const body: Record<string, string> = {

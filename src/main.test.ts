@@ -191,6 +191,30 @@ describe("sanitizeErrorForUI (exported)", () => {
 		expect(sanitizeErrorForUI("")).toBe("");
 	});
 
+	it("redacts OAuth app tokens (gho_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Token gho_abcdefghij1234567890 leaked";
+		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] leaked");
+	});
+
+	it("redacts user-to-server tokens (ghu_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Token ghu_abcdefghij1234567890 leaked";
+		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] leaked");
+	});
+
+	it("redacts server-to-server tokens (ghs_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Token ghs_abcdefghij1234567890 leaked";
+		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] leaked");
+	});
+
+	it("redacts GitHub App tokens (ghx_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Token ghx_abcdefghij1234567890 leaked";
+		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] leaked");
+	});
+
 	it("does not redact short ghp_ strings below 20 chars", async () => {
 		const { sanitizeErrorForUI } = await import("./main");
 		const msg = "ghp_short";

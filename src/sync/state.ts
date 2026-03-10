@@ -81,6 +81,9 @@ export class SyncStateManager {
 	}
 
 	setHeadOid(oid: string): void {
+		if (oid !== "" && !SHA_HEX_PATTERN.test(oid)) {
+			throw new Error(`Invalid OID: ${oid}`);
+		}
 		this.state.lastRemoteHeadSha = oid;
 	}
 
