@@ -7,6 +7,7 @@ import {
 	GitHubNotFoundError,
 	GitHubRateLimitError,
 } from "../types";
+import { toBase64 } from "../utils/base64";
 import type { Logger } from "../utils/logger";
 import { GitHubClient } from "./client";
 import { RateLimiter } from "./rate-limit";
@@ -117,6 +118,154 @@ describe("GitHubClient", () => {
 			mockResponse([{ name: "main" }, { name: "dev" }]);
 			const result = await createClient().listBranches();
 			expect(result).toEqual(["main", "dev"]);
+		});
+	});
+
+	describe("createFile", () => {
+		it("returns sha and commitSha on success", async () => {
+			mockRequest.mockResolvedValue({
+				json: {
+					content: { sha: "file-sha-123" },
+					commit: { sha: "commit-sha-456" },
+				},
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const client = createClient();
+			const result = await client.createFile("notes/test.md", "hello", "add file", "main");
+
+			expect(result).toEqual({ sha: "file-sha-123", commitSha: "commit-sha-456" });
+			expect(mockRequest).toHaveBeenCalledWith(
+				expect.objectContaining({
+					url: "https://api.github.com/repos/testowner/testrepo/contents/notes/test.md",
+					method: "PUT",
+					body: JSON.stringify({
+						message: "add file",
+						content: toBase64("hello"),
+						branch: "main",
+					}),
+				}),
+			);
+		});
+
+		it("does not include branch in body when not provided", async () => {
+			mockRequest.mockResolvedValue({
+				json: {
+					content: { sha: "file-sha" },
+					commit: { sha: "commit-sha" },
+				},
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const client = createClient();
+			await client.createFile("test.md", "data", "create");
+
+			// Find the PUT calls (createFile) among all requestUrl calls
+			const putCalls = mockRequest.mock.calls.filter((call) => {
+				const arg = call[0] as { method?: string };
+				return arg.method === "PUT";
+			});
+			// The last PUT call is from this test (no branch)
+			const lastPut = putCalls[putCalls.length - 1];
+			expect(lastPut).toBeDefined();
+			const body = (lastPut[0] as { body?: string }).body ?? "";
+			const parsed = JSON.parse(body) as Record<string, unknown>;
+			expect(parsed).not.toHaveProperty("branch");
+			expect(parsed.message).toBe("create");
+			expect(parsed.content).toBe(toBase64("data"));
+		});
+
+		it("throws GitHubConflictError on 422/409 conflict", async () => {
+			mockRequest.mockRejectedValue({ status: 409 });
+			await expect(
+				createClient().createFile("existing.md", "content", "add file", "main"),
+			).rejects.toThrow(GitHubConflictError);
+		});
+
+		it("throws GitHubAuthError on 401", async () => {
+			mockRequest.mockRejectedValue({ status: 401 });
+			await expect(createClient().createFile("file.md", "content", "add file")).rejects.toThrow(
+				GitHubAuthError,
+			);
+		});
+
+		it("throws GitHubNotFoundError on 404", async () => {
+			mockRequest.mockRejectedValue({ status: 404 });
+			await expect(createClient().createFile("file.md", "content", "add file")).rejects.toThrow(
+				GitHubNotFoundError,
+			);
+		});
+
+		it("throws when rate limited before request", async () => {
+			const rateLimiter = new RateLimiter();
+			const futureReset = Math.floor(Date.now() / 1000) + 3600;
+			rateLimiter.updateFromHeaders({
+				"x-ratelimit-limit": "5000",
+				"x-ratelimit-remaining": "0",
+				"x-ratelimit-reset": String(futureReset),
+			});
+			const client = createClient(rateLimiter);
+			await expect(client.createFile("file.md", "content", "add file")).rejects.toThrow(
+				GitHubRateLimitError,
+			);
+		});
+	});
+
+	describe("getFileContent — malformed response", () => {
+		it("throws on missing content field", async () => {
+			mockResponse({ sha: "abc", size: 5 });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
+		});
+
+		it("throws on missing sha field", async () => {
+			mockResponse({ content: "aGVsbG8=", size: 5 });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
+		});
+
+		it("throws on missing size field", async () => {
+			mockResponse({ content: "aGVsbG8=", sha: "abc" });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
+		});
+
+		it("throws when content is not a string", async () => {
+			mockResponse({ content: 123, sha: "abc", size: 5 });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
+		});
+
+		it("throws when sha is not a string", async () => {
+			mockResponse({ content: "aGVsbG8=", sha: null, size: 5 });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
+		});
+
+		it("throws when size is not a number", async () => {
+			mockResponse({ content: "aGVsbG8=", sha: "abc", size: "5" });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
 		});
 	});
 
