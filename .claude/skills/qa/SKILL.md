@@ -7,7 +7,7 @@ Launch a dedicated QA agent to perform comprehensive testing analysis.
 
 **Scope:** $ARGUMENTS (empty = full `src/`). Resolve module names to directories: `sync` → `src/sync/**`, `github` → `src/github/**`, `utils` → `src/utils/**`, `ui` → `src/ui/**`, `settings` → `src/settings.ts`, `main` → `src/main.ts`, `types` → `src/types.ts`.
 
-The agent MUST perform all 6 analysis directions below, in order. The agent is a READ-ONLY auditor for source code — it NEVER modifies `src/**/*.ts` files. It CAN create or update `*.bench.ts` benchmark files and CAN run test commands.
+The agent MUST perform all 5 analysis directions below, in order. The agent is a READ-ONLY auditor for source code — it NEVER modifies `src/**/*.ts` files. It CAN create or update `*.bench.ts` benchmark files and CAN run test commands.
 
 ---
 
@@ -90,49 +90,6 @@ Analyze integration-level coverage:
 
 ---
 
-## Direction 6: Auto-file Issues
-
-After completing all 5 analysis directions, review your findings and auto-create GitHub issues for **confirmed bugs** and **technical debt**.
-
-### Step 1: Check existing issues
-
-```bash
-scripts/github.sh issue-list
-```
-
-Do NOT create duplicates of already-open issues.
-
-### Step 2: File bug issues
-
-Read the bug template at `.claude/skills/qa/templates/bug.md` and follow it exactly.
-
-For each finding where code **behaves incorrectly** (wrong result, data corruption, skipped validation, logic error), create a bug issue:
-
-```bash
-scripts/github.sh issue-create "<type>(<scope>): <description>" -l bug -b "<body>"
-```
-
-### Step 3: File debt issues
-
-Read the debt template at `.claude/skills/qa/templates/debt.md` and follow it exactly.
-
-**Group related findings** by module or theme into one issue (2-8 findings per issue). Do NOT create one issue per finding.
-
-For each group of findings where code **works but is fragile/untested/slow**, create a debt issue:
-
-```bash
-scripts/github.sh issue-create "<type>(<scope>): <description>" -l debt -b "<body>"
-```
-
-### Rules
-
-- Scopes for issue titles: `github`, `sync`, `ui`, `settings`, `utils`, `types`, `deps`, `infra` — ONLY these
-- Types: `fix` for bugs, `test`/`perf`/`refactor` for debt
-- All issue creation goes through `scripts/github.sh` — NEVER use `gh` directly
-- If `scripts/github.sh` fails or is unavailable, list the issues you would create in the report instead
-
----
-
 ## Report Format
 
 Produce the report in this exact structure:
@@ -168,12 +125,6 @@ Benchmark results: (paste vitest bench output if benchmarks were run)
 | # | Area | Status | Notes |
 |---|------|--------|-------|
 
-### 6. Filed Issues
-
-| # | Issue | Label | Title |
-|---|-------|-------|-------|
-(List all issues created by this QA run. If none, write "No issues filed.")
-
 ### Recommendations
 
 **Priority 1 — Blockers (must fix before release):**
@@ -191,7 +142,6 @@ Benchmark results: (paste vitest bench output if benchmarks were run)
 - Coverage: N% statements, N% branches
 - Benchmarks run: N
 - Findings total: N (P1: N, P2: N, P3: N)
-- Issues filed: N (bugs: N, debt: N)
 ```
 
 ## Important Notes
