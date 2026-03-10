@@ -6,6 +6,7 @@ import { isSafePath } from "../utils/path";
 import type { SyncStateManager } from "./state";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_GRAPHQL_FILE_SIZE = 1.5 * 1024 * 1024; // 1.5MB — GraphQL ~2MB base64 limit
 
 export interface VaultReader {
 	readFile(path: string): Promise<string>;
@@ -71,6 +72,14 @@ export class PushEngine {
 					this.logger.warn("Skipping oversized file", {
 						path: change.path,
 						size: contentSize,
+					});
+					continue;
+				}
+				if (contentSize > MAX_GRAPHQL_FILE_SIZE) {
+					this.logger.warn("Skipping large file — exceeds GraphQL payload limit", {
+						path: change.path,
+						size: contentSize,
+						maxSize: MAX_GRAPHQL_FILE_SIZE,
 					});
 					continue;
 				}

@@ -286,6 +286,53 @@ describe("PushEngine", () => {
 		expect(state.setSHA).not.toHaveBeenCalledWith("huge.bin", expect.any(Object));
 	});
 
+	it("skips files exceeding GraphQL 1.5MB limit", async () => {
+		const graphql = createMockGraphQL();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const largeContent = "x".repeat(1.6 * 1024 * 1024); // ~1.6MB
+		vi.mocked(vault.readFile).mockImplementation((path: string) => {
+			if (path === "large.bin") return Promise.resolve(largeContent);
+			return Promise.resolve(`content of ${path}`);
+		});
+		const engine = new PushEngine({ graphql, state, vault, logger });
+
+		const changes: FileChange[] = [
+			{ path: "large.bin", type: "create" },
+			{ path: "small.md", type: "create" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toEqual(["small.md"]);
+		expect(logger.warn).toHaveBeenCalledWith(
+			"Skipping large file — exceeds GraphQL payload limit",
+			expect.objectContaining({
+				path: "large.bin",
+				size: expect.any(Number),
+				maxSize: expect.any(Number),
+			}),
+		);
+	});
+
+	it("does not skip files just under 1.5MB GraphQL limit", async () => {
+		const graphql = createMockGraphQL();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const justUnderContent = "x".repeat(1.4 * 1024 * 1024); // ~1.4MB
+		vi.mocked(vault.readFile).mockImplementation((path: string) => {
+			if (path === "medium.bin") return Promise.resolve(justUnderContent);
+			return Promise.resolve(`content of ${path}`);
+		});
+		const engine = new PushEngine({ graphql, state, vault, logger });
+
+		const changes: FileChange[] = [{ path: "medium.bin", type: "create" }];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toEqual(["medium.bin"]);
+	});
+
 	it("encodes file content to base64", async () => {
 		const graphql = createMockGraphQL();
 		const vault = createMockVault();

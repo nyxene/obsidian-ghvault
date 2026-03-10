@@ -383,6 +383,96 @@ describe("Sync integration", () => {
 		});
 	});
 
+	describe("conflict detection — file changed both locally and remotely", () => {
+		it("skips conflicted files in both pull and push", async () => {
+			const { engine, vault, graphql, storage } = createIntegrationSetup({
+				localFiles: [{ path: "conflict.md", content: "local version" }],
+				remoteFiles: [
+					{ path: "conflict.md", sha: "sha-remote-v2", content: "remote version", size: 14 },
+				],
+			});
+
+			// Simulate prior sync: file was synced before, now both sides changed
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: "remote-head-sha",
+					lastSyncedAt: 1000,
+					cache: {
+						"conflict.md": {
+							remoteSha: "sha-remote-v1",
+							localContentHash: "old-local-hash",
+							lastSyncedAt: 1000,
+							size: 10,
+							isBinary: false,
+						},
+					},
+				},
+			};
+
+			const result = await engine.sync();
+
+			// Should detect the conflict
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.conflicts[0].path).toBe("conflict.md");
+
+			// Pull should NOT have overwritten the local file
+			expect(result.pull.modified).not.toContain("conflict.md");
+			expect(vault.files.get("conflict.md")).toBe("local version");
+
+			// Push should NOT have pushed the conflicted file
+			expect(result.push).toBeNull();
+			expect(graphql.createCommit).not.toHaveBeenCalled();
+		});
+
+		it("handles conflict alongside non-conflicting changes", async () => {
+			const { engine, vault, storage } = createIntegrationSetup({
+				localFiles: [
+					{ path: "conflict.md", content: "local version" },
+					{ path: "local-new.md", content: "new local file" },
+				],
+				remoteFiles: [
+					{ path: "conflict.md", sha: "sha-remote-v2", content: "remote version", size: 14 },
+					{ path: "remote-new.md", sha: "sha-remote-new", content: "new remote", size: 10 },
+				],
+			});
+
+			// conflict.md was synced before; both sides now have changes
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: "remote-head-sha",
+					lastSyncedAt: 1000,
+					cache: {
+						"conflict.md": {
+							remoteSha: "sha-remote-v1",
+							localContentHash: "old-hash",
+							lastSyncedAt: 1000,
+							size: 10,
+							isBinary: false,
+						},
+					},
+				},
+			};
+
+			const result = await engine.sync();
+
+			// Conflict detected
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.conflicts[0].path).toBe("conflict.md");
+
+			// Non-conflicting remote file should be pulled
+			expect(result.pull.created).toContain("remote-new.md");
+			expect(vault.files.get("remote-new.md")).toBe("new remote");
+
+			// Non-conflicting local file should be pushed
+			expect(result.push).not.toBeNull();
+			expect(result.push?.pushed).toContain("local-new.md");
+			expect(result.push?.pushed).not.toContain("conflict.md");
+
+			// Conflicted file should be untouched
+			expect(vault.files.get("conflict.md")).toBe("local version");
+		});
+	});
+
 	describe("network failure during push — state integrity", () => {
 		it("does not corrupt state when graphql.createCommit throws", async () => {
 			const { engine, graphql, storage } = createIntegrationSetup({
@@ -495,11 +585,12 @@ describe("Sync integration", () => {
 			});
 
 			// Second sync: should detect no pull or push changes
-			// Update the state cache to have a matching localContentHash
+			// Update the state cache to have a matching localContentHash and persist it
 			const cached = state.getSHA("stable.md");
 			if (cached) {
 				state.setSHA("stable.md", { ...cached, localContentHash: "hash-stable.md-14" });
 			}
+			await state.save();
 
 			const second = await engine.sync();
 			expect(second.pull.created).toHaveLength(0);
