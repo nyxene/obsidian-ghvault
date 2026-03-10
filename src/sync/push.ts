@@ -103,19 +103,18 @@ export class PushEngine {
 
 		result.oid = commitResult.oid;
 
-		for (const change of changes) {
-			if (change.type === "create" || change.type === "modify") {
-				const info = contentHashes.get(change.path);
-				this.state.setSHA(change.path, {
-					remoteSha: "",
-					localContentHash: info?.hash ?? "",
-					lastSyncedAt: Date.now(),
-					size: info?.size ?? 0,
-					isBinary: false,
-				});
-			} else if (change.type === "delete") {
-				this.state.deleteSHA(change.path);
-			}
+		for (const path of result.pushed) {
+			const info = contentHashes.get(path);
+			this.state.setSHA(path, {
+				remoteSha: "",
+				localContentHash: info?.hash ?? "",
+				lastSyncedAt: Date.now(),
+				size: info?.size ?? 0,
+				isBinary: false,
+			});
+		}
+		for (const path of result.deleted) {
+			this.state.deleteSHA(path);
 		}
 
 		this.state.setHeadOid(commitResult.oid);
