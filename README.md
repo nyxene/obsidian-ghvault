@@ -1,8 +1,26 @@
 # obsidian-ghvault
 
+[![Release](https://img.shields.io/github/v/release/nyxene/obsidian-ghvault?style=flat-square)](https://github.com/nyxene/obsidian-ghvault/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/nyxene/obsidian-ghvault/ci.yml?style=flat-square)](https://github.com/nyxene/obsidian-ghvault/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+
 **GHVault** — bidirectional vault-GitHub sync plugin for [Obsidian](https://obsidian.md). No git CLI required. Works on desktop and mobile.
 
 Syncs your vault to a GitHub repository using the REST and GraphQL APIs directly — no `git` binary, no shell commands, no desktop-only dependencies. Designed from the ground up to work everywhere Obsidian runs, including iOS and Android.
+
+## Why GHVault?
+
+Most Obsidian-to-GitHub solutions wrap the `git` CLI, which means they only work on desktop or require complex mobile workarounds. GHVault takes a different approach:
+
+| | GHVault | git-based plugins |
+|---|---|---|
+| Mobile (iOS/Android) | Full support | Limited or none |
+| Git CLI required | No | Yes |
+| Commit signing | Automatic (GPG via GitHub) | Manual setup |
+| Setup complexity | Token + repo name | Git install + SSH keys + config |
+| Conflict handling | Skip & report | Merge conflicts (manual resolution) |
+
+If you want simple, reliable vault backup to GitHub that works the same on every device — GHVault is for you.
 
 ## Features
 
@@ -16,9 +34,19 @@ Syncs your vault to a GitHub repository using the REST and GraphQL APIs directly
 - **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
 
+## Requirements
+
+- Obsidian **1.5.0+** (desktop or mobile)
+- A GitHub repository (public or private)
+- GitHub Personal Access Token ([fine-grained](https://github.com/settings/tokens?type=beta) recommended)
+- Internet connection (no offline sync)
+
 ## Installation
 
-> GHVault is not yet published to the Obsidian Community Plugins directory. Manual installation is required for now.
+> [!NOTE]
+> GHVault is in active development. We recommend testing on a non-critical repository first and keeping backups of important vaults.
+
+GHVault is not yet in the Obsidian Community Plugins directory. Install manually:
 
 1. Download the latest release from [Releases](https://github.com/nyxene/obsidian-ghvault/releases)
 2. Extract `main.js`, `manifest.json`, and `styles.css` into your vault's `.obsidian/plugins/ghvault/` directory
@@ -28,7 +56,7 @@ Syncs your vault to a GitHub repository using the REST and GraphQL APIs directly
 
 ### 1. Create a GitHub Personal Access Token
 
-Go to [GitHub Settings → Developer Settings → Fine-grained tokens](https://github.com/settings/tokens?type=beta) and create a token with:
+Go to [GitHub Settings → Fine-grained tokens](https://github.com/settings/tokens?type=beta) and create a token with:
 
 - **Repository access**: select the repository you want to sync with
 - **Permissions**:
@@ -48,6 +76,8 @@ Open Obsidian Settings → GHVault and fill in:
 | **Repository** | Repository name |
 | **Branch** | Branch to sync with (default: `main`) |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
+
+Use the **Test Connection** button to verify your settings before syncing.
 
 ### 3. Sync
 
@@ -91,6 +121,15 @@ Everything in your vault **except**:
 
 When the same file is changed both locally and on GitHub between syncs, GHVault **skips the file on both sides** and reports it as a conflict. Neither version is overwritten. This is the safest default — you can resolve conflicts manually.
 
+## Limitations
+
+- **No offline sync** — requires an internet connection. Changes are queued locally but not synced until online.
+- **File size limits** — files over 50MB are skipped (GitHub API limit). Files over 1.5MB use a slower upload path due to GraphQL payload limits.
+- **No merge** — conflicting files are skipped, not merged. You need to resolve conflicts manually by choosing one version.
+- **API rate limits** — GitHub allows 5,000 REST requests/hour and 5,000 GraphQL points/hour. Large vaults with thousands of files may hit limits during initial sync.
+- **Single branch** — syncs with one branch at a time. No multi-branch workflows.
+- **No real-time sync** — sync is manual (ribbon click or command). No auto-sync on file change yet.
+
 ## Security
 
 - **Token storage**: your GitHub PAT is stored in Obsidian's `data.json` (plaintext). This is an Obsidian platform limitation — no secure keychain API is available. We recommend using fine-grained tokens with minimal scopes.
@@ -99,6 +138,12 @@ When the same file is changed both locally and on GitHub between syncs, GHVault 
 - **SHA integrity**: downloaded file content is verified against GitHub's reported SHA to detect tampering or corruption.
 - **Request timeouts**: all HTTP requests have a 30-second timeout to prevent indefinite hangs.
 - **OWASP audited**: the codebase has been audited against the OWASP Top 10.
+
+## Getting help
+
+- **Questions?** Start a [Discussion](https://github.com/nyxene/obsidian-ghvault/discussions)
+- **Found a bug?** Open an [Issue](https://github.com/nyxene/obsidian-ghvault/issues)
+- **Feature idea?** Post in [Discussions → Ideas](https://github.com/nyxene/obsidian-ghvault/discussions/categories/ideas)
 
 ## Development
 
