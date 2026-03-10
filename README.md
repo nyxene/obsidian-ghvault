@@ -1,8 +1,8 @@
 # obsidian-ghvault
 
-Bidirectional vault-GitHub sync for [Obsidian](https://obsidian.md). No git CLI required. Works on desktop and mobile.
+**GHVault** — bidirectional vault-GitHub sync plugin for [Obsidian](https://obsidian.md). No git CLI required. Works on desktop and mobile.
 
-GHVault syncs your vault to a GitHub repository using the GitHub REST and GraphQL APIs directly — no `git` binary, no shell commands, no desktop-only dependencies. Designed from the ground up to work everywhere Obsidian runs, including iOS and Android.
+Syncs your vault to a GitHub repository using the REST and GraphQL APIs directly — no `git` binary, no shell commands, no desktop-only dependencies. Designed from the ground up to work everywhere Obsidian runs, including iOS and Android.
 
 ## Features
 
