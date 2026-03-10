@@ -1,4 +1,4 @@
-# GHVault
+# obsidian-ghvault
 
 Bidirectional vault-GitHub sync for [Obsidian](https://obsidian.md). No git CLI required. Works on desktop and mobile.
 
