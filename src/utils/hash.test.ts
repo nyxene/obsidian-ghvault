@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeHash } from "./hash";
+import { computeGitBlobSha, computeHash } from "./hash";
 
 describe("computeHash", () => {
 	it("returns a 64-char hex string", async () => {
@@ -27,5 +27,46 @@ describe("computeHash", () => {
 	it("handles unicode content", async () => {
 		const hash = await computeHash("привет мир 🌍");
 		expect(hash).toHaveLength(64);
+	});
+});
+
+describe("computeGitBlobSha", () => {
+	it("returns a 40-char hex SHA-1 string", async () => {
+		const data = new TextEncoder().encode("hello");
+		const sha = await computeGitBlobSha(data);
+		expect(sha).toHaveLength(40);
+		expect(sha).toMatch(/^[0-9a-f]{40}$/);
+	});
+
+	it("produces known git blob SHA for 'hello'", async () => {
+		// Equivalent to: echo -n 'hello' | git hash-object --stdin
+		// git computes SHA-1 of "blob 5\0hello"
+		const data = new TextEncoder().encode("hello");
+		const sha = await computeGitBlobSha(data);
+		expect(sha).toBe("b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0");
+	});
+
+	it("produces known git blob SHA for empty content", async () => {
+		// Equivalent to: echo -n '' | git hash-object --stdin
+		// git computes SHA-1 of "blob 0\0"
+		const data = new Uint8Array(0);
+		const sha = await computeGitBlobSha(data);
+		expect(sha).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+	});
+
+	it("produces different SHAs for different content", async () => {
+		const a = await computeGitBlobSha(new TextEncoder().encode("foo"));
+		const b = await computeGitBlobSha(new TextEncoder().encode("bar"));
+		expect(a).not.toBe(b);
+	});
+
+	it("uses git blob format (blob {size}\\0{content})", async () => {
+		// Verify the function uses correct prefix format by checking
+		// that changing content length changes the SHA even if raw bytes overlap
+		const short = new TextEncoder().encode("ab");
+		const long = new TextEncoder().encode("abc");
+		const shaShort = await computeGitBlobSha(short);
+		const shaLong = await computeGitBlobSha(long);
+		expect(shaShort).not.toBe(shaLong);
 	});
 });
