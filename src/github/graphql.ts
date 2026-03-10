@@ -1,8 +1,8 @@
-import { requestUrl } from "obsidian";
 import type { GitHubCommitResult } from "../types";
 import { GitHubAuthError, GitHubConflictError, GitHubRateLimitError } from "../types";
 import type { Logger } from "../utils/logger";
 import type { RateLimiter } from "./rate-limit";
+import { requestWithTimeout } from "./request-timeout";
 
 const GRAPHQL_URL = "https://api.github.com/graphql";
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024; // 2MB base64 limit
@@ -126,7 +126,7 @@ export class GitHubGraphQL {
 			deletions: options.deletions.length,
 		});
 
-		const response = await requestUrl({
+		const response = await requestWithTimeout({
 			url: GRAPHQL_URL,
 			method: "POST",
 			headers: {

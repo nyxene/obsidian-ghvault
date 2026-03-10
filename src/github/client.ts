@@ -1,5 +1,4 @@
 import type { RequestUrlResponse } from "obsidian";
-import { requestUrl } from "obsidian";
 import type { GitHubRef, GitHubRepoInfo, GitHubTreeEntry } from "../types";
 import {
 	GitHubAuthError,
@@ -11,6 +10,7 @@ import {
 import { toBase64 } from "../utils/base64";
 import type { Logger } from "../utils/logger";
 import type { RateLimiter } from "./rate-limit";
+import { requestWithTimeout } from "./request-timeout";
 
 const BASE_URL = "https://api.github.com";
 const API_VERSION = "2022-11-28";
@@ -129,7 +129,7 @@ export class GitHubClient {
 
 		let response: RequestUrlResponse;
 		try {
-			response = await requestUrl({
+			response = await requestWithTimeout({
 				url,
 				method: "PUT",
 				headers: {
@@ -160,7 +160,7 @@ export class GitHubClient {
 
 		let response: RequestUrlResponse;
 		try {
-			response = await requestUrl({
+			response = await requestWithTimeout({
 				url,
 				method: "GET",
 				headers: {
