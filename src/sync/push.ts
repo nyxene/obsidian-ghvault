@@ -6,6 +6,7 @@ import { isSafePath } from "../utils/path";
 import type { SyncStateManager } from "./state";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_GRAPHQL_FILE_SIZE = 1.5 * 1024 * 1024; // 1.5MB — GraphQL ~2MB base64 limit
 
 export interface VaultReader {
 	readFile(path: string): Promise<string>;
@@ -74,6 +75,14 @@ export class PushEngine {
 					});
 					continue;
 				}
+				if (contentSize > MAX_GRAPHQL_FILE_SIZE) {
+					this.logger.warn("Skipping large file — exceeds GraphQL payload limit", {
+						path: change.path,
+						size: contentSize,
+						maxSize: MAX_GRAPHQL_FILE_SIZE,
+					});
+					continue;
+				}
 				const base64Content = encodeToBase64(content);
 				const hash = await computeHash(content);
 				additions.push({ path: change.path, base64Content });
@@ -133,9 +142,12 @@ export class PushEngine {
 
 function encodeToBase64(content: string): string {
 	const bytes = new TextEncoder().encode(content);
-	let binary = "";
-	for (const byte of bytes) {
-		binary += String.fromCharCode(byte);
+	const chunkSize = 8192;
+	const chunks: string[] = [];
+	for (let i = 0; i < bytes.length; i += chunkSize) {
+		const end = Math.min(i + chunkSize, bytes.length);
+		const slice = bytes.subarray(i, end);
+		chunks.push(String.fromCharCode(...slice));
 	}
-	return btoa(binary);
+	return btoa(chunks.join(""));
 }

@@ -90,6 +90,77 @@ describe("isExcluded", () => {
 	});
 });
 
+describe("isExcluded — ** prefix patterns", () => {
+	it("matches file at root matching **/suffix", () => {
+		expect(isExcluded(".git", ["**/.git"])).toBe(true);
+	});
+
+	it("matches file nested under directory matching **/suffix", () => {
+		expect(isExcluded("subdir/.git", ["**/.git"])).toBe(true);
+		expect(isExcluded("a/b/c/.git", ["**/.git"])).toBe(true);
+	});
+
+	it("does not match partial name for **/suffix", () => {
+		expect(isExcluded("not-git", ["**/.git"])).toBe(false);
+		expect(isExcluded("subdir/not.git", ["**/.git"])).toBe(false);
+	});
+
+	it("matches nested directory path with **/suffix", () => {
+		expect(isExcluded("deep/nested/node_modules", ["**/node_modules"])).toBe(true);
+	});
+
+	it("does not match when suffix is only a substring", () => {
+		expect(isExcluded("my-node_modules-extra", ["**/node_modules"])).toBe(false);
+	});
+});
+
+describe("isExcluded — *. extension patterns", () => {
+	it("matches file with given extension at root", () => {
+		expect(isExcluded("file.tmp", ["*.tmp"])).toBe(true);
+	});
+
+	it("matches file with given extension in subdirectory", () => {
+		expect(isExcluded("notes/scratch.tmp", ["*.tmp"])).toBe(true);
+		expect(isExcluded("a/b/c/data.bak", ["*.bak"])).toBe(true);
+	});
+
+	it("does not match different extension", () => {
+		expect(isExcluded("file.md", ["*.tmp"])).toBe(false);
+	});
+
+	it("does not match extension as substring", () => {
+		expect(isExcluded("file.tmp2", ["*.tmp"])).toBe(false);
+	});
+
+	it("matches case-insensitively", () => {
+		expect(isExcluded("FILE.TMP", ["*.tmp"])).toBe(true);
+		expect(isExcluded("notes/Data.BAK", ["*.bak"])).toBe(true);
+	});
+
+	it("handles dotfile-like extensions", () => {
+		expect(isExcluded("archive.tar.gz", ["*.gz"])).toBe(true);
+		expect(isExcluded("archive.tar.gz", ["*.tar.gz"])).toBe(true);
+	});
+});
+
+describe("isExcluded — combined pattern types", () => {
+	it("checks multiple pattern types together", () => {
+		const patterns = [".obsidian/**", "**/.git", "*.tmp"];
+		expect(isExcluded(".obsidian/config.json", patterns)).toBe(true);
+		expect(isExcluded("sub/.git", patterns)).toBe(true);
+		expect(isExcluded("notes/scratch.tmp", patterns)).toBe(true);
+		expect(isExcluded("notes/daily.md", patterns)).toBe(false);
+	});
+
+	it("handles exact match pattern alongside glob patterns", () => {
+		const patterns = ["ghvault.log", "**/.DS_Store", "*.bak"];
+		expect(isExcluded("ghvault.log", patterns)).toBe(true);
+		expect(isExcluded("folder/.DS_Store", patterns)).toBe(true);
+		expect(isExcluded("old/backup.bak", patterns)).toBe(true);
+		expect(isExcluded("readme.md", patterns)).toBe(false);
+	});
+});
+
 describe("isSafePath", () => {
 	it("allows normal paths", () => {
 		expect(isSafePath("notes/daily.md")).toBe(true);

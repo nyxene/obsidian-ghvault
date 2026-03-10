@@ -44,6 +44,12 @@ export interface FileChange {
 	content?: string;
 }
 
+export interface ConflictInfo {
+	path: string;
+	localChange: ChangeType;
+	remoteChange: ChangeType;
+}
+
 // ---------------------------------------------------------------------------
 // GitHub API types
 // ---------------------------------------------------------------------------

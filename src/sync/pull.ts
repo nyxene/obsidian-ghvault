@@ -43,7 +43,31 @@ export class PullEngine {
 		this.logger = options.logger;
 	}
 
-	async pull(branch: string): Promise<PullResult> {
+	async getRemoteChanges(branch: string): Promise<FileChange[]> {
+		let ref: GitHubRef;
+		try {
+			ref = await this.client.getRef(branch);
+		} catch (error: unknown) {
+			if (error instanceof GitHubEmptyRepoError) {
+				return [];
+			}
+			throw error;
+		}
+		const commit = await this.client.getCommit(ref.sha);
+
+		let treeEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+		try {
+			const tree = await this.client.getTree(commit.treeSha, true);
+			treeEntries = tree.entries;
+		} catch (error: unknown) {
+			if (!(error instanceof GitHubNotFoundError)) throw error;
+		}
+
+		const cache = this.state.getAllSHAs();
+		return computeRemoteChanges(treeEntries, cache);
+	}
+
+	async pull(branch: string, skipPaths?: ReadonlySet<string>): Promise<PullResult> {
 		const result: PullResult = { created: [], modified: [], deleted: [], errors: [] };
 
 		this.logger.info("Pull started", { branch });
@@ -92,7 +116,9 @@ export class PullEngine {
 		}
 
 		const cache = this.state.getAllSHAs();
-		const changes = computeRemoteChanges(treeEntries, cache);
+		const allChanges = computeRemoteChanges(treeEntries, cache);
+
+		const changes = skipPaths?.size ? allChanges.filter((c) => !skipPaths.has(c.path)) : allChanges;
 
 		if (changes.length === 0) {
 			this.logger.info("Pull complete — no remote changes");
