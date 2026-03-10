@@ -6,6 +6,7 @@ import {
 	GitHubEmptyRepoError,
 	GitHubNotFoundError,
 	GitHubRateLimitError,
+	GitHubTimeoutError,
 } from "../types";
 import { toBase64 } from "../utils/base64";
 import type { Logger } from "../utils/logger";
@@ -301,6 +302,31 @@ describe("GitHubClient", () => {
 		it("throws GitHubEmptyRepoError on 409 with empty message", async () => {
 			mockRequest.mockRejectedValue({ status: 409, message: "Git Repository is empty." });
 			await expect(createClient().getRef("main")).rejects.toThrow(GitHubEmptyRepoError);
+		});
+	});
+
+	describe("timeout", () => {
+		it("throws GitHubTimeoutError when request hangs on GET", async () => {
+			vi.useFakeTimers();
+			mockRequest.mockReturnValue(new Promise(() => {}) as ReturnType<typeof requestUrl>);
+
+			const promise = createClient().getRepoInfo();
+			vi.advanceTimersByTime(30_000);
+
+			await expect(promise).rejects.toThrow(GitHubTimeoutError);
+			await expect(promise).rejects.toThrow("Request timed out after 30s");
+			vi.useRealTimers();
+		});
+
+		it("throws GitHubTimeoutError when request hangs on PUT (createFile)", async () => {
+			vi.useFakeTimers();
+			mockRequest.mockReturnValue(new Promise(() => {}) as ReturnType<typeof requestUrl>);
+
+			const promise = createClient().createFile("test.md", "content", "add file");
+			vi.advanceTimersByTime(30_000);
+
+			await expect(promise).rejects.toThrow(GitHubTimeoutError);
+			vi.useRealTimers();
 		});
 	});
 
