@@ -2,63 +2,38 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "./types";
 
 // ---------------------------------------------------------------------------
-// sanitizeErrorForUI is a module-private function in main.ts.
-// We replicate its logic here to test the expected behaviour as a
-// regression guard.
+// Track Notice instances created during tests
 // ---------------------------------------------------------------------------
 
-function sanitizeErrorForUI(message: string): string {
-	return message.replace(
-		/ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g,
-		"[REDACTED]",
-	);
+interface NoticeRecord {
+	message: string;
 }
 
-describe("sanitizeErrorForUI", () => {
-	it("redacts classic personal access tokens (ghp_)", () => {
-		const msg = "Auth failed with token ghp_abcdefghij1234567890";
-		expect(sanitizeErrorForUI(msg)).toBe("Auth failed with token [REDACTED]");
-	});
+const noticeLog: NoticeRecord[] = [];
 
-	it("redacts fine-grained personal access tokens (github_pat_)", () => {
-		const msg = "Token github_pat_abc123_XYZXYZXYZXYZXYZXYZXYZ was rejected";
-		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] was rejected");
-	});
-
-	it("redacts Bearer tokens", () => {
-		const msg = "Header: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.abc";
-		expect(sanitizeErrorForUI(msg)).toBe("Header: [REDACTED]");
-	});
-
-	it("redacts multiple tokens in the same message", () => {
-		const msg = "Tried ghp_aaaabbbbccccddddeeee1234 then ghp_11112222333344445555aaaa";
-		const result = sanitizeErrorForUI(msg);
-		expect(result).not.toContain("ghp_");
-		expect(result).toBe("Tried [REDACTED] then [REDACTED]");
-	});
-
-	it("passes through messages without tokens", () => {
-		const msg = "Network timeout after 30s";
-		expect(sanitizeErrorForUI(msg)).toBe(msg);
-	});
-
-	it("handles empty string", () => {
-		expect(sanitizeErrorForUI("")).toBe("");
-	});
-
-	it("does not redact short ghp_ strings below 20 chars", () => {
-		const msg = "ghp_short";
-		expect(sanitizeErrorForUI(msg)).toBe("ghp_short");
-	});
+vi.mock("obsidian", async (importOriginal) => {
+	const orig = (await importOriginal()) as Record<string, unknown>;
+	return {
+		...orig,
+		Notice: class Notice {
+			message: string;
+			constructor(message: string, _duration?: number) {
+				this.message = message;
+				noticeLog.push({ message });
+			}
+		},
+	};
 });
 
 // ---------------------------------------------------------------------------
-// GHVaultPlugin — tests via dynamic import with all heavy deps mocked
+// Mock all heavy dependencies before importing the module under test
 // ---------------------------------------------------------------------------
+
+const mockGetRepoInfo = vi.fn();
 
 vi.mock("./github/client", () => ({
 	GitHubClient: class MockGitHubClient {
-		getRepoInfo = vi.fn();
+		getRepoInfo = mockGetRepoInfo;
 	},
 }));
 
@@ -70,13 +45,19 @@ vi.mock("./github/rate-limit", () => ({
 	RateLimiter: class MockRateLimiter {},
 }));
 
+const mockSync = vi.fn().mockResolvedValue({
+	pull: { created: [], modified: [], deleted: [], errors: [] },
+	push: null,
+});
+
+let mockIsSyncing = false;
+
 vi.mock("./sync/engine", () => ({
 	SyncEngine: class MockSyncEngine {
-		isSyncing = false;
-		sync = vi.fn().mockResolvedValue({
-			pull: { created: [], modified: [], deleted: [], errors: [] },
-			push: null,
-		});
+		get isSyncing(): boolean {
+			return mockIsSyncing;
+		}
+		sync = mockSync;
 	},
 }));
 
@@ -114,172 +95,364 @@ vi.mock("./settings", () => ({
 // biome-ignore lint/suspicious/noExplicitAny: test helper for accessing private members
 type AnyPlugin = any;
 
+const CONFIGURED_SETTINGS = {
+	settings: {
+		githubToken: "ghp_token1234567890123456",
+		owner: "me",
+		repo: "vault",
+		branch: "main",
+	},
+};
+
 function createMockElement(): Record<string, unknown> {
 	return { setText: vi.fn(), textContent: "" };
 }
 
-async function createPluginInstance(loadDataResult: unknown = null): Promise<{
+function lastNotice(): NoticeRecord {
+	return noticeLog[noticeLog.length - 1];
+}
+
+async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	plugin: AnyPlugin;
-	loadDataSpy: ReturnType<typeof vi.fn>;
-	saveDataSpy: ReturnType<typeof vi.fn>;
+	statusBarEl: Record<string, unknown>;
+	ribbonCallback: () => void;
+	commandCallback: () => void;
+	onTestConnection: () => Promise<void>;
 }> {
 	const mod = await import("./main");
 	const PluginClass = mod.default as AnyPlugin;
 	const plugin = new PluginClass();
-	const loadDataSpy = vi.fn().mockResolvedValue(loadDataResult);
-	const saveDataSpy = vi.fn().mockResolvedValue(undefined);
-	plugin.loadData = loadDataSpy;
-	plugin.saveData = saveDataSpy;
+
+	plugin.loadData = vi.fn().mockResolvedValue(loadDataResult);
+	plugin.saveData = vi.fn().mockResolvedValue(undefined);
 	plugin.app = { vault: {} } as AnyPlugin;
-	// Override methods that use `document` (no DOM in node environment)
-	plugin.addRibbonIcon = vi.fn().mockReturnValue(createMockElement());
-	plugin.addCommand = vi.fn();
-	plugin.addStatusBarItem = vi.fn().mockReturnValue(createMockElement());
+
+	const statusBarEl = createMockElement();
+	let ribbonCallback: () => void = () => {};
+	let commandCallback: () => void = () => {};
+
+	plugin.addRibbonIcon = vi
+		.fn()
+		.mockImplementation((_icon: string, _title: string, cb: () => void) => {
+			ribbonCallback = cb;
+			return createMockElement();
+		});
+
+	plugin.addCommand = vi.fn().mockImplementation((cmd: { callback: () => void }) => {
+		commandCallback = cmd.callback;
+		return cmd;
+	});
+
+	plugin.addStatusBarItem = vi.fn().mockReturnValue(statusBarEl);
 	plugin.addSettingTab = vi.fn();
-	return { plugin, loadDataSpy, saveDataSpy };
+
+	await plugin.onload();
+
+	const onTestConnection = (): Promise<void> => plugin.testConnection();
+
+	return { plugin, statusBarEl, ribbonCallback, commandCallback, onTestConnection };
 }
+
+describe("sanitizeErrorForUI (exported)", () => {
+	it("redacts classic personal access tokens (ghp_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Auth failed with token ghp_abcdefghij1234567890";
+		expect(sanitizeErrorForUI(msg)).toBe("Auth failed with token [REDACTED]");
+	});
+
+	it("redacts fine-grained personal access tokens (github_pat_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Token github_pat_abc123_XYZXYZXYZXYZXYZXYZXYZ was rejected";
+		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] was rejected");
+	});
+
+	it("redacts Bearer tokens", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Header: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.abc";
+		expect(sanitizeErrorForUI(msg)).toBe("Header: [REDACTED]");
+	});
+
+	it("redacts multiple tokens in the same message", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Tried ghp_aaaabbbbccccddddeeee1234 then ghp_11112222333344445555aaaa";
+		const result = sanitizeErrorForUI(msg);
+		expect(result).not.toContain("ghp_");
+		expect(result).toBe("Tried [REDACTED] then [REDACTED]");
+	});
+
+	it("passes through messages without tokens", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Network timeout after 30s";
+		expect(sanitizeErrorForUI(msg)).toBe(msg);
+	});
+
+	it("handles empty string", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		expect(sanitizeErrorForUI("")).toBe("");
+	});
+
+	it("does not redact short ghp_ strings below 20 chars", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "ghp_short";
+		expect(sanitizeErrorForUI(msg)).toBe("ghp_short");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// GHVaultPlugin — tests via dynamic import with all heavy deps mocked
+// ---------------------------------------------------------------------------
 
 describe("GHVaultPlugin", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		noticeLog.length = 0;
+		mockSync.mockReset().mockResolvedValue({
+			pull: { created: [], modified: [], deleted: [], errors: [] },
+			push: null,
+		});
+		mockIsSyncing = false;
+		mockGetRepoInfo.mockReset();
 	});
 
 	describe("loadSettings", () => {
 		it("uses defaults when loadData returns null", async () => {
-			const { plugin } = await createPluginInstance(null);
-			await plugin.onload();
+			const { plugin } = await loadPlugin(null);
 			expect(plugin.settings).toEqual(expect.objectContaining(DEFAULT_SETTINGS));
 		});
 
 		it("uses defaults when loadData returns empty object", async () => {
-			const { plugin } = await createPluginInstance({});
-			await plugin.onload();
+			const { plugin } = await loadPlugin({});
 			expect(plugin.settings).toEqual(expect.objectContaining(DEFAULT_SETTINGS));
 		});
 
 		it("merges stored settings with defaults", async () => {
-			const { plugin } = await createPluginInstance({
+			const { plugin } = await loadPlugin({
 				settings: { githubToken: "ghp_stored", owner: "me" },
 			});
-			await plugin.onload();
 			expect(plugin.settings.githubToken).toBe("ghp_stored");
 			expect(plugin.settings.owner).toBe("me");
 			expect(plugin.settings.branch).toBe("main"); // from defaults
 		});
 
 		it("resets invalid logLevel to default", async () => {
-			const { plugin } = await createPluginInstance({
+			const { plugin } = await loadPlugin({
 				settings: { logLevel: "INVALID_LEVEL" },
 			});
-			await plugin.onload();
 			expect(plugin.settings.logLevel).toBe(DEFAULT_SETTINGS.logLevel);
 		});
 
 		it("keeps valid logLevel", async () => {
-			const { plugin } = await createPluginInstance({
+			const { plugin } = await loadPlugin({
 				settings: { logLevel: "debug" },
 			});
-			await plugin.onload();
 			expect(plugin.settings.logLevel).toBe("debug");
 		});
 	});
 
 	describe("rebuildSyncEngine", () => {
 		it("sets syncEngine to null when token is missing", async () => {
-			const { plugin } = await createPluginInstance({
+			const { plugin } = await loadPlugin({
 				settings: { owner: "me", repo: "vault", githubToken: "" },
 			});
-			await plugin.onload();
 			expect(plugin.syncEngine).toBeNull();
 		});
 
 		it("sets syncEngine to null when owner is missing", async () => {
-			const { plugin } = await createPluginInstance({
+			const { plugin } = await loadPlugin({
 				settings: { owner: "", repo: "vault", githubToken: "ghp_token1234567890123456" },
 			});
-			await plugin.onload();
 			expect(plugin.syncEngine).toBeNull();
 		});
 
 		it("sets syncEngine to null when repo is missing", async () => {
-			const { plugin } = await createPluginInstance({
+			const { plugin } = await loadPlugin({
 				settings: { owner: "me", repo: "", githubToken: "ghp_token1234567890123456" },
 			});
-			await plugin.onload();
 			expect(plugin.syncEngine).toBeNull();
 		});
 
 		it("creates syncEngine when all settings are provided", async () => {
-			const { plugin } = await createPluginInstance({
-				settings: {
-					githubToken: "ghp_token1234567890123456",
-					owner: "me",
-					repo: "vault",
-					branch: "main",
-				},
-			});
-			await plugin.onload();
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
 			expect(plugin.syncEngine).not.toBeNull();
+		});
+	});
+
+	describe("command callback", () => {
+		it("triggers runSync when command is executed", async () => {
+			const { commandCallback } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			commandCallback();
+			await vi.waitFor(() => {
+				expect(mockSync).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		it("command is registered with correct id and name", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const addCommandCall = vi.mocked(plugin.addCommand).mock.calls[0][0];
+			expect(addCommandCall.id).toBe("ghvault-sync");
+			expect(addCommandCall.name).toBe("Sync now");
+		});
+	});
+
+	describe("ribbon icon", () => {
+		it("triggers runSync when ribbon icon is clicked", async () => {
+			const { ribbonCallback } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			ribbonCallback();
+			await vi.waitFor(() => {
+				expect(mockSync).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		it("ribbon icon is registered with correct icon and title", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const call = vi.mocked(plugin.addRibbonIcon).mock.calls[0];
+			expect(call[0]).toBe("refresh-cw");
+			expect(call[1]).toBe("GHVault: Sync now");
+		});
+	});
+
+	describe("testConnection", () => {
+		it("shows success notice with repo info on success", async () => {
+			mockGetRepoInfo.mockResolvedValue({
+				fullName: "me/vault",
+				private: false,
+				defaultBranch: "main",
+			});
+
+			const { onTestConnection } = await loadPlugin(CONFIGURED_SETTINGS);
+			await onTestConnection();
+
+			expect(lastNotice().message).toBe("GHVault: Connected — me/vault (public)");
+		});
+
+		it("shows success notice with private visibility", async () => {
+			mockGetRepoInfo.mockResolvedValue({
+				fullName: "me/vault",
+				private: true,
+				defaultBranch: "main",
+			});
+
+			const { onTestConnection } = await loadPlugin(CONFIGURED_SETTINGS);
+			await onTestConnection();
+
+			expect(lastNotice().message).toBe("GHVault: Connected — me/vault (private)");
+		});
+
+		it("shows failure notice and rethrows on error", async () => {
+			mockGetRepoInfo.mockRejectedValue(new Error("401 Unauthorized"));
+
+			const { onTestConnection } = await loadPlugin(CONFIGURED_SETTINGS);
+			await expect(onTestConnection()).rejects.toThrow("401 Unauthorized");
+
+			expect(lastNotice().message).toBe("GHVault: Connection failed — 401 Unauthorized");
+		});
+
+		it("redacts tokens in failure notice", async () => {
+			mockGetRepoInfo.mockRejectedValue(new Error("Auth failed with ghp_abcdefghij1234567890"));
+
+			const { onTestConnection } = await loadPlugin(CONFIGURED_SETTINGS);
+			await expect(onTestConnection()).rejects.toThrow();
+
+			expect(lastNotice().message).toBe("GHVault: Connection failed — Auth failed with [REDACTED]");
+		});
+	});
+
+	describe("status bar transitions", () => {
+		it("sets status to idle on load", async () => {
+			const { statusBarEl } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(statusBarEl.setText).toHaveBeenCalledWith("GHVault: idle");
+		});
+
+		it("transitions idle -> syncing -> idle on successful sync", async () => {
+			const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+			await plugin.runSync();
+
+			const calls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]);
+			expect(calls).toEqual(["GHVault: syncing...", "GHVault: idle"]);
+		});
+
+		it("transitions idle -> syncing -> error on failed sync", async () => {
+			mockSync.mockRejectedValueOnce(new Error("Network error"));
+
+			const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+			await plugin.runSync();
+
+			const calls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]);
+			expect(calls).toEqual(["GHVault: syncing...", "GHVault: error"]);
+		});
+
+		it("shows 'Already up to date' notice when nothing changed", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Already up to date");
+		});
+
+		it("shows counts notice when files were synced", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: ["a.md"], modified: ["b.md"], deleted: [], errors: [] },
+				push: { pushed: ["c.md"], deleted: [] },
+			});
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Synced — 2 pulled, 1 pushed");
 		});
 	});
 
 	describe("runSync guards", () => {
 		it("returns early when no engine configured", async () => {
-			const { plugin } = await createPluginInstance(null);
-			await plugin.onload();
-			// syncEngine is null because no settings — runSync should return early
+			const { plugin } = await loadPlugin(null);
 			await plugin.runSync();
 			expect(plugin.syncEngine).toBeNull();
 		});
 
 		it("returns early when sync is already in progress", async () => {
-			const { plugin } = await createPluginInstance({
-				settings: {
-					githubToken: "ghp_token1234567890123456",
-					owner: "me",
-					repo: "vault",
-				},
-			});
-			await plugin.onload();
-			plugin.syncEngine.isSyncing = true;
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			mockIsSyncing = true;
 
-			// Should not throw, just return early
 			await plugin.runSync();
-			// sync() should NOT have been called since isSyncing was true
-			expect(plugin.syncEngine.sync).not.toHaveBeenCalled();
+			expect(mockSync).not.toHaveBeenCalled();
 		});
 
 		it("blocks when cooldown has not elapsed", async () => {
-			const { plugin } = await createPluginInstance({
-				settings: {
-					githubToken: "ghp_token1234567890123456",
-					owner: "me",
-					repo: "vault",
-				},
-			});
-			await plugin.onload();
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
 
-			// First sync sets lastSyncAt
 			await plugin.runSync();
-			expect(plugin.syncEngine.sync).toHaveBeenCalledTimes(1);
+			expect(mockSync).toHaveBeenCalledTimes(1);
 
 			// Second sync immediately — should be blocked by cooldown
 			await plugin.runSync();
-			// sync() should still only have been called once
-			expect(plugin.syncEngine.sync).toHaveBeenCalledTimes(1);
+			expect(mockSync).toHaveBeenCalledTimes(1);
+		});
+
+		it("shows notice when sync failed with error details", async () => {
+			mockSync.mockRejectedValueOnce(new Error("API rate limit exceeded"));
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Sync failed — API rate limit exceeded");
 		});
 	});
 
 	describe("onunload", () => {
 		it("clears all references", async () => {
-			const { plugin } = await createPluginInstance({
-				settings: {
-					githubToken: "ghp_token1234567890123456",
-					owner: "me",
-					repo: "vault",
-				},
-			});
-			await plugin.onload();
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
 			expect(plugin.syncEngine).not.toBeNull();
 
 			await plugin.onunload();
