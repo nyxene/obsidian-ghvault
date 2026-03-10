@@ -1,6 +1,7 @@
 import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
 import type { GHVaultSettings, LogLevel } from "./types";
 import { VALID_LOG_LEVELS } from "./types";
+import { normalizePath } from "./utils/path";
 
 export function sanitizeSlug(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._-]/g, "");
@@ -8,6 +9,13 @@ export function sanitizeSlug(value: string): string {
 
 export function sanitizeBranch(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._/-]/g, "");
+}
+
+export function sanitizeSyncFolder(value: string): string {
+	const normalized = normalizePath(value);
+	// Reject any segment that is ".."
+	const segments = normalized.split("/").filter((s) => s !== "" && s !== "..");
+	return segments.join("/");
 }
 
 export interface SettingTabCallbacks {
@@ -98,6 +106,22 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.settings.branch = sanitizeBranch(value);
 						text.setValue(this.settings.branch);
+						await this.callbacks.onSave(this.settings);
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Sync folder")
+			.setDesc(
+				"Folder path inside the GitHub repository to sync with. Leave empty to sync entire repo.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("docs/vault")
+					.setValue(this.settings.syncFolder)
+					.onChange(async (value) => {
+						this.settings.syncFolder = sanitizeSyncFolder(value);
+						text.setValue(this.settings.syncFolder);
 						await this.callbacks.onSave(this.settings);
 					}),
 			);

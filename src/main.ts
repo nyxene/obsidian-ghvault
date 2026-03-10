@@ -64,7 +64,7 @@ export default class GHVaultPlugin extends Plugin {
 	}
 
 	private rebuildSyncEngine(): void {
-		const { githubToken, owner, repo, branch } = this.settings;
+		const { githubToken, owner, repo, branch, syncFolder } = this.settings;
 		if (!githubToken || !owner || !repo) {
 			this.syncEngine = null;
 			return;
@@ -99,6 +99,7 @@ export default class GHVaultPlugin extends Plugin {
 			state,
 			vault: vaultAdapter,
 			logger,
+			syncFolder,
 		});
 
 		const pushEngine = new PushEngine({
@@ -106,6 +107,7 @@ export default class GHVaultPlugin extends Plugin {
 			state,
 			vault: vaultAdapter,
 			logger,
+			syncFolder,
 		});
 
 		this.syncEngine = new SyncEngine({

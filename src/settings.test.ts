@@ -5,6 +5,7 @@ import {
 	type SettingTabCallbacks,
 	sanitizeBranch,
 	sanitizeSlug,
+	sanitizeSyncFolder,
 } from "./settings";
 import type { GHVaultSettings } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
@@ -155,6 +156,37 @@ describe("sanitizeBranch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// sanitizeSyncFolder
+// ---------------------------------------------------------------------------
+
+describe("sanitizeSyncFolder", () => {
+	it("passes through valid folder paths", () => {
+		expect(sanitizeSyncFolder("docs")).toBe("docs");
+		expect(sanitizeSyncFolder("docs/vault")).toBe("docs/vault");
+		expect(sanitizeSyncFolder("my-folder/sub")).toBe("my-folder/sub");
+	});
+
+	it("strips leading and trailing slashes", () => {
+		expect(sanitizeSyncFolder("/docs/")).toBe("docs");
+		expect(sanitizeSyncFolder("//docs//vault//")).toBe("docs/vault");
+	});
+
+	it("removes .. segments", () => {
+		expect(sanitizeSyncFolder("../etc/passwd")).toBe("etc/passwd");
+		expect(sanitizeSyncFolder("docs/../../secret")).toBe("docs/secret");
+		expect(sanitizeSyncFolder("..")).toBe("");
+	});
+
+	it("handles empty string", () => {
+		expect(sanitizeSyncFolder("")).toBe("");
+	});
+
+	it("normalizes backslashes", () => {
+		expect(sanitizeSyncFolder("docs\\vault")).toBe("docs/vault");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // GHVaultSettingTab
 // ---------------------------------------------------------------------------
 
@@ -182,11 +214,11 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates six Setting instances", () => {
+		it("creates seven Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
-			// token, owner, repo, branch, test connection, log level
-			expect(getSettings()).toHaveLength(6);
+			// token, owner, repo, branch, sync folder, test connection, log level
+			expect(getSettings()).toHaveLength(7);
 		});
 
 		it("creates settings with expected names", () => {
@@ -197,6 +229,7 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Repository owner");
 			expect(names).toContain("Repository name");
 			expect(names).toContain("Branch");
+			expect(names).toContain("Sync folder");
 			expect(names).toContain("Test connection");
 			expect(names).toContain("Log level");
 		});
@@ -277,6 +310,15 @@ describe("GHVaultSettingTab", () => {
 			const branchSetting = findSettingByName("Branch");
 			await branchSetting.textComponents[0].simulateChange("feat/my branch~1");
 			expect(settings.branch).toBe("feat/mybranch1");
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("sanitizes syncFolder via sanitizeSyncFolder on change", async () => {
+			const { tab, callbacks, settings } = createTab({ syncFolder: "" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			await syncFolderSetting.textComponents[0].simulateChange("/docs/../vault/");
+			expect(settings.syncFolder).toBe("docs/vault");
 			expect(callbacks.onSave).toHaveBeenCalled();
 		});
 
