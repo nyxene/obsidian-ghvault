@@ -1,5 +1,79 @@
 import { vi } from "vitest";
 
+// ---------------------------------------------------------------------------
+// Minimal fake DOM element that works without jsdom / happy-dom.
+// Obsidian augments HTMLElement with helpers like empty(), createEl(),
+// setText(), etc. We reproduce the subset needed by our tests.
+// ---------------------------------------------------------------------------
+
+interface FakeStyle {
+	[key: string]: string;
+}
+
+interface FakeEl {
+	tagName: string;
+	className: string;
+	textContent: string;
+	type: string;
+	style: FakeStyle;
+	children: FakeEl[];
+	empty(): void;
+	createEl(tag: string, opts?: { cls?: string; text?: string }): FakeEl;
+	setText(text: string): void;
+	querySelector(selector: string): FakeEl | null;
+	appendChild(child: FakeEl): void;
+}
+
+function createFakeEl(tag: string): FakeEl {
+	const el: FakeEl = {
+		tagName: tag.toUpperCase(),
+		className: "",
+		textContent: "",
+		type: "",
+		style: {} as FakeStyle,
+		children: [],
+		empty() {
+			this.children = [];
+			this.textContent = "";
+		},
+		createEl(t: string, opts?: { cls?: string; text?: string }): FakeEl {
+			const child = createFakeEl(t);
+			if (opts?.cls) child.className = opts.cls;
+			if (opts?.text) child.textContent = opts.text;
+			this.children.push(child);
+			return child;
+		},
+		setText(text: string) {
+			this.textContent = text;
+		},
+		querySelector(selector: string): FakeEl | null {
+			// Minimal: supports ".classname" selectors
+			if (selector.startsWith(".")) {
+				const cls = selector.slice(1);
+				return findByClass(this, cls);
+			}
+			return null;
+		},
+		appendChild(child: FakeEl) {
+			this.children.push(child);
+		},
+	};
+	return el;
+}
+
+function findByClass(el: FakeEl, cls: string): FakeEl | null {
+	for (const child of el.children) {
+		if (child.className === cls) return child;
+		const found = findByClass(child, cls);
+		if (found) return found;
+	}
+	return null;
+}
+
+// ---------------------------------------------------------------------------
+// Obsidian API mocks
+// ---------------------------------------------------------------------------
+
 export const requestUrl = vi.fn();
 
 export class Plugin {
@@ -10,21 +84,21 @@ export class Plugin {
 	}
 	async saveData(_data: unknown): Promise<void> {}
 	addSettingTab(_tab: unknown): void {}
-	addRibbonIcon(_icon: string, _title: string, _cb: unknown): HTMLElement {
-		return document.createElement("div");
+	addRibbonIcon(_icon: string, _title: string, _cb: unknown): unknown {
+		return createFakeEl("div");
 	}
 	addCommand(_cmd: unknown): unknown {
 		return _cmd;
 	}
-	addStatusBarItem(): HTMLElement {
-		return document.createElement("div");
+	addStatusBarItem(): unknown {
+		return createFakeEl("div");
 	}
 }
 
 export class PluginSettingTab {
 	app: unknown;
 	plugin: unknown;
-	containerEl = document.createElement("div");
+	containerEl = createFakeEl("div");
 	constructor(app: unknown, plugin: unknown) {
 		this.app = app;
 		this.plugin = plugin;
@@ -33,23 +107,144 @@ export class PluginSettingTab {
 	hide(): void {}
 }
 
+export class TextComponent {
+	inputEl = createFakeEl("input");
+	private _value = "";
+	private _placeholder = "";
+	private _onChange?: (value: string) => void | Promise<void>;
+
+	setPlaceholder(placeholder: string): this {
+		this._placeholder = placeholder;
+		return this;
+	}
+	setValue(value: string): this {
+		this._value = value;
+		return this;
+	}
+	getValue(): string {
+		return this._value;
+	}
+	getPlaceholder(): string {
+		return this._placeholder;
+	}
+	onChange(cb: (value: string) => void | Promise<void>): this {
+		this._onChange = cb;
+		return this;
+	}
+	async simulateChange(value: string): Promise<void> {
+		await this._onChange?.(value);
+	}
+}
+
+export class DropdownComponent {
+	private _value = "";
+	private _options: Record<string, string> = {};
+	private _onChange?: (value: string) => void | Promise<void>;
+
+	addOptions(options: Record<string, string>): this {
+		this._options = options;
+		return this;
+	}
+	getOptions(): Record<string, string> {
+		return this._options;
+	}
+	setValue(value: string): this {
+		this._value = value;
+		return this;
+	}
+	getValue(): string {
+		return this._value;
+	}
+	onChange(cb: (value: string) => void | Promise<void>): this {
+		this._onChange = cb;
+		return this;
+	}
+	async simulateChange(value: string): Promise<void> {
+		await this._onChange?.(value);
+	}
+}
+
+export class ButtonComponent {
+	private _text = "";
+	private _disabled = false;
+	private _onClick?: () => void | Promise<void>;
+
+	setButtonText(text: string): this {
+		this._text = text;
+		return this;
+	}
+	getButtonText(): string {
+		return this._text;
+	}
+	setDisabled(disabled: boolean): this {
+		this._disabled = disabled;
+		return this;
+	}
+	isDisabled(): boolean {
+		return this._disabled;
+	}
+	onClick(cb: () => void | Promise<void>): this {
+		this._onClick = cb;
+		return this;
+	}
+	async simulateClick(): Promise<void> {
+		await this._onClick?.();
+	}
+}
+
 export class Setting {
-	setName(_name: string): this {
+	static instances: Setting[] = [];
+	static clearInstances(): void {
+		Setting.instances = [];
+	}
+
+	settingEl = createFakeEl("div");
+	nameEl = createFakeEl("div");
+	descEl = createFakeEl("div");
+
+	private _name = "";
+	private _desc = "";
+	textComponents: TextComponent[] = [];
+	dropdownComponents: DropdownComponent[] = [];
+	buttonComponents: ButtonComponent[] = [];
+
+	constructor(_containerEl: unknown) {
+		Setting.instances.push(this);
+	}
+
+	setName(name: string): this {
+		this._name = name;
 		return this;
 	}
-	setDesc(_desc: string): this {
+	getName(): string {
+		return this._name;
+	}
+	setDesc(desc: string): this {
+		this._desc = desc;
 		return this;
 	}
-	addText(_cb: unknown): this {
+	getDesc(): string {
+		return this._desc;
+	}
+	addText(cb: (text: TextComponent) => unknown): this {
+		const text = new TextComponent();
+		cb(text);
+		this.textComponents.push(text);
 		return this;
 	}
-	addDropdown(_cb: unknown): this {
+	addDropdown(cb: (dropdown: DropdownComponent) => unknown): this {
+		const dropdown = new DropdownComponent();
+		cb(dropdown);
+		this.dropdownComponents.push(dropdown);
 		return this;
 	}
 	addToggle(_cb: unknown): this {
 		return this;
 	}
-	addButton(_cb: unknown): this {
+	addButton(cb: (button: ButtonComponent) => void): this {
+		const button = new ButtonComponent();
+		cb(button);
+		this.buttonComponents.push(button);
 		return this;
 	}
 }
