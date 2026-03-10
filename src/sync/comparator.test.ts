@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { GitHubTreeEntry, SHACacheEntry } from "../types";
+import type { FileChange, GitHubTreeEntry, SHACacheEntry } from "../types";
 import type { LocalFileInfo } from "./comparator";
-import { computeLocalChanges, computeRemoteChanges } from "./comparator";
+import { computeLocalChanges, computeRemoteChanges, detectConflicts } from "./comparator";
 
 function cacheEntry(overrides: Partial<SHACacheEntry> = {}): SHACacheEntry {
 	return {
@@ -178,5 +178,82 @@ describe("computeRemoteChanges", () => {
 		expect(changes).toContainEqual({ path: "existing.md", type: "modify" });
 		expect(changes).toContainEqual({ path: "added.md", type: "create" });
 		expect(changes).toContainEqual({ path: "removed.md", type: "delete" });
+	});
+});
+
+describe("detectConflicts", () => {
+	it("returns empty when no overlapping paths", () => {
+		const local: FileChange[] = [{ path: "local.md", type: "create" }];
+		const remote: FileChange[] = [{ path: "remote.md", type: "create" }];
+
+		expect(detectConflicts(local, remote)).toEqual([]);
+	});
+
+	it("detects conflict when same file modified both locally and remotely", () => {
+		const local: FileChange[] = [{ path: "doc.md", type: "modify" }];
+		const remote: FileChange[] = [{ path: "doc.md", type: "modify" }];
+
+		const conflicts = detectConflicts(local, remote);
+
+		expect(conflicts).toEqual([{ path: "doc.md", localChange: "modify", remoteChange: "modify" }]);
+	});
+
+	it("detects conflict when file created locally and remotely", () => {
+		const local: FileChange[] = [{ path: "new.md", type: "create" }];
+		const remote: FileChange[] = [{ path: "new.md", type: "create" }];
+
+		const conflicts = detectConflicts(local, remote);
+
+		expect(conflicts).toEqual([{ path: "new.md", localChange: "create", remoteChange: "create" }]);
+	});
+
+	it("detects conflict when file modified locally and deleted remotely", () => {
+		const local: FileChange[] = [{ path: "doc.md", type: "modify" }];
+		const remote: FileChange[] = [{ path: "doc.md", type: "delete" }];
+
+		const conflicts = detectConflicts(local, remote);
+
+		expect(conflicts).toEqual([{ path: "doc.md", localChange: "modify", remoteChange: "delete" }]);
+	});
+
+	it("detects conflict when file deleted locally and modified remotely", () => {
+		const local: FileChange[] = [{ path: "doc.md", type: "delete" }];
+		const remote: FileChange[] = [{ path: "doc.md", type: "modify" }];
+
+		const conflicts = detectConflicts(local, remote);
+
+		expect(conflicts).toEqual([{ path: "doc.md", localChange: "delete", remoteChange: "modify" }]);
+	});
+
+	it("detects multiple conflicts in mixed change sets", () => {
+		const local: FileChange[] = [
+			{ path: "a.md", type: "modify" },
+			{ path: "b.md", type: "create" },
+			{ path: "c.md", type: "delete" },
+			{ path: "local-only.md", type: "create" },
+		];
+		const remote: FileChange[] = [
+			{ path: "a.md", type: "modify" },
+			{ path: "b.md", type: "create" },
+			{ path: "remote-only.md", type: "create" },
+		];
+
+		const conflicts = detectConflicts(local, remote);
+
+		expect(conflicts).toHaveLength(2);
+		expect(conflicts).toContainEqual({
+			path: "a.md",
+			localChange: "modify",
+			remoteChange: "modify",
+		});
+		expect(conflicts).toContainEqual({
+			path: "b.md",
+			localChange: "create",
+			remoteChange: "create",
+		});
+	});
+
+	it("returns empty when both change lists are empty", () => {
+		expect(detectConflicts([], [])).toEqual([]);
 	});
 });

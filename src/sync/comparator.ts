@@ -1,4 +1,4 @@
-import type { FileChange, GitHubTreeEntry, SHACacheEntry } from "../types";
+import type { ConflictInfo, FileChange, GitHubTreeEntry, SHACacheEntry } from "../types";
 import { isExcluded } from "../utils/path";
 
 export interface LocalFileInfo {
@@ -76,4 +76,32 @@ export function computeRemoteChanges(
 	}
 
 	return changes;
+}
+
+/**
+ * Detect conflicts: files that appear in both local and remote change sets.
+ * Returns the list of conflicted paths so they can be skipped in both pull and push.
+ */
+export function detectConflicts(
+	localChanges: FileChange[],
+	remoteChanges: FileChange[],
+): ConflictInfo[] {
+	const localByPath = new Map<string, FileChange>();
+	for (const change of localChanges) {
+		localByPath.set(change.path, change);
+	}
+
+	const conflicts: ConflictInfo[] = [];
+	for (const remote of remoteChanges) {
+		const local = localByPath.get(remote.path);
+		if (local) {
+			conflicts.push({
+				path: remote.path,
+				localChange: local.type,
+				remoteChange: remote.type,
+			});
+		}
+	}
+
+	return conflicts;
 }

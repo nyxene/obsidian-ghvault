@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { FileChange } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import type { SyncVault } from "./engine";
@@ -10,9 +11,13 @@ import type { SyncStateManager } from "./state";
 const emptyPull: PullResult = { created: [], modified: [], deleted: [], errors: [] };
 const emptyPush: PushResult = { pushed: [], deleted: [], oid: "" };
 
-function createMockPullEngine(result: PullResult = emptyPull): PullEngine {
+function createMockPullEngine(
+	result: PullResult = emptyPull,
+	remoteChanges: import("../types").FileChange[] = [],
+): PullEngine {
 	return {
 		pull: vi.fn().mockResolvedValue(result),
+		getRemoteChanges: vi.fn().mockResolvedValue(remoteChanges),
 		updateCacheFromCommit: vi.fn().mockResolvedValue(undefined),
 	} as unknown as PullEngine;
 }
@@ -79,10 +84,11 @@ describe("SyncEngine", () => {
 
 		const result = await engine.sync();
 
-		expect(pullEngine.pull).toHaveBeenCalledWith("main");
+		expect(pullEngine.pull).toHaveBeenCalledWith("main", expect.any(Set));
 		expect(pushEngine.push).not.toHaveBeenCalled();
 		expect(result.pull).toEqual(emptyPull);
 		expect(result.push).toBeNull();
+		expect(result.conflicts).toEqual([]);
 	});
 
 	it("pulls only when no local changes", async () => {
@@ -173,6 +179,7 @@ describe("SyncEngine", () => {
 				.mockImplementation(
 					() => new Promise((resolve) => setTimeout(() => resolve(emptyPull), 50)),
 				),
+			getRemoteChanges: vi.fn().mockResolvedValue([]),
 		} as unknown as PullEngine;
 		const { engine } = createEngine({ pullEngine });
 
@@ -187,6 +194,7 @@ describe("SyncEngine", () => {
 	it("releases mutex after error in pull", async () => {
 		const pullEngine = {
 			pull: vi.fn().mockRejectedValue(new Error("network error")),
+			getRemoteChanges: vi.fn().mockRejectedValue(new Error("network error")),
 		} as unknown as PullEngine;
 		const { engine } = createEngine({ pullEngine });
 
@@ -197,10 +205,11 @@ describe("SyncEngine", () => {
 	it("releases mutex after error in push", async () => {
 		const vault = createMockVault([{ path: "f.md", contentHash: "h", size: 1 }]);
 		const state = createMockState({});
+		const pullEngine = createMockPullEngine(emptyPull, []);
 		const pushEngine = {
 			push: vi.fn().mockRejectedValue(new Error("push failed")),
 		} as unknown as PushEngine;
-		const { engine } = createEngine({ pushEngine, vault, state });
+		const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
 
 		await expect(engine.sync()).rejects.toThrow("push failed");
 		expect(engine.isSyncing).toBe(false);
@@ -213,5 +222,100 @@ describe("SyncEngine", () => {
 		await engine.sync();
 
 		expect(state.load).toHaveBeenCalled();
+	});
+
+	describe("conflict detection", () => {
+		it("skips conflicted files in both pull and push", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullResult: PullResult = { created: [], modified: [], deleted: [], errors: [] };
+			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
+
+			const vault = createMockVault([
+				{ path: "conflict.md", contentHash: "new-local-hash", size: 10 },
+			]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-local-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			// Conflict detected
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.conflicts[0]).toEqual({
+				path: "conflict.md",
+				localChange: "modify",
+				remoteChange: "modify",
+			});
+
+			// Pull should receive conflict paths as skipPaths
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+
+			// Push should not include conflicted file
+			expect(pushEngine.push).not.toHaveBeenCalled();
+		});
+
+		it("allows non-conflicting files through while skipping conflicts", async () => {
+			const remoteChanges: FileChange[] = [
+				{ path: "conflict.md", type: "modify" },
+				{ path: "remote-only.md", type: "create" },
+			];
+			const pullResult: PullResult = {
+				created: ["remote-only.md"],
+				modified: [],
+				deleted: [],
+				errors: [],
+			};
+			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
+
+			const vault = createMockVault([
+				{ path: "conflict.md", contentHash: "new-local", size: 10 },
+				{ path: "local-only.md", contentHash: "hash-local", size: 20 },
+			]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-local",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushResult: PushResult = { pushed: ["local-only.md"], deleted: [], oid: "oid" };
+			const pushEngine = createMockPushEngine(pushResult);
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.pull.created).toContain("remote-only.md");
+
+			// Push should only include non-conflicting local changes
+			expect(pushEngine.push).toHaveBeenCalledWith(
+				[{ path: "local-only.md", type: "create" }],
+				expect.any(Object),
+			);
+		});
+
+		it("reports no conflicts when changes are on different files", async () => {
+			const remoteChanges: FileChange[] = [{ path: "remote.md", type: "create" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+
+			const vault = createMockVault([{ path: "local.md", contentHash: "hash", size: 10 }]);
+			const state = createMockState({});
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toEqual([]);
+		});
 	});
 });
