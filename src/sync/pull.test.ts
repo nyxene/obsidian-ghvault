@@ -216,6 +216,86 @@ describe("PullEngine", () => {
 		expect(client.getTree).toHaveBeenCalledWith("tree-sha", true);
 	});
 
+	it("skips unsafe paths from remote", async () => {
+		const client = createMockClient([
+			{ path: "../etc/passwd", sha: "sha-evil" },
+			{ path: "safe.md", sha: "sha-safe" },
+		]);
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual(["safe.md"]);
+		expect(result.errors).toEqual(
+			expect.arrayContaining([{ path: "../etc/passwd", error: "Unsafe path rejected" }]),
+		);
+		expect(vault.writeFile).not.toHaveBeenCalledWith("../etc/passwd", expect.anything());
+		expect(logger.warn).toHaveBeenCalledWith("Skipping unsafe path from remote", {
+			path: "../etc/passwd",
+		});
+	});
+
+	it("skips oversized files from remote (>50MB)", async () => {
+		const oversized = 51 * 1024 * 1024;
+		const client = createMockClient([
+			{ path: "huge.bin", sha: "sha-huge", size: oversized },
+			{ path: "small.md", sha: "sha-small", size: 100 },
+		]);
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual(["small.md"]);
+		expect(result.errors).toEqual(
+			expect.arrayContaining([expect.objectContaining({ path: "huge.bin" })]),
+		);
+		expect(vault.writeFile).not.toHaveBeenCalledWith("huge.bin", expect.anything());
+		expect(logger.warn).toHaveBeenCalledWith("Skipping oversized file", {
+			path: "huge.bin",
+			size: oversized,
+			maxSize: 50 * 1024 * 1024,
+		});
+	});
+
+	it("rejects file when SHA integrity check fails (real computeGitBlobSha)", async () => {
+		// Restore real computeGitBlobSha for this test
+		vi.mocked(computeGitBlobSha).mockRestore();
+		const { computeGitBlobSha: realComputeGitBlobSha } =
+			await vi.importActual<typeof import("../utils/hash")>("../utils/hash");
+		vi.mocked(computeGitBlobSha).mockImplementation(realComputeGitBlobSha);
+
+		const client = createMockClient([{ path: "tampered.md", sha: "sha-tampered" }]);
+		// Override getFileContent to return content whose real SHA won't match "sha-tampered"
+		vi.mocked(client.getFileContent).mockResolvedValue({
+			content: btoa("some content"),
+			sha: "sha-tampered",
+			size: 12,
+		});
+
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual([]);
+		expect(result.errors).toEqual([
+			{
+				path: "tampered.md",
+				error: "SHA integrity check failed — content may be tampered",
+			},
+		]);
+		expect(vault.writeFile).not.toHaveBeenCalled();
+		expect(state.setSHA).not.toHaveBeenCalled();
+	});
+
 	it("initializes empty repo with .ghvault file", async () => {
 		const client = createMockClient();
 		vi.mocked(client.getRef).mockRejectedValue(new GitHubEmptyRepoError());
