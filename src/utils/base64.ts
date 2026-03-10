@@ -12,11 +12,19 @@ export function fromBase64(encoded: string): string {
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-	let binary = "";
-	for (let i = 0; i < bytes.length; i++) {
-		binary += String.fromCharCode(bytes[i]);
+	return btoa(uint8ArrayToBinaryString(bytes));
+}
+
+/** Convert Uint8Array to binary string using chunked String.fromCharCode — O(n) */
+function uint8ArrayToBinaryString(bytes: Uint8Array): string {
+	const chunkSize = 8192;
+	const chunks: string[] = [];
+	for (let i = 0; i < bytes.length; i += chunkSize) {
+		const end = Math.min(i + chunkSize, bytes.length);
+		const slice = bytes.subarray(i, end);
+		chunks.push(String.fromCharCode(...slice));
 	}
-	return btoa(binary);
+	return chunks.join("");
 }
 
 export function base64ToBytes(encoded: string): Uint8Array {
