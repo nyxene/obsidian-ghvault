@@ -1,8 +1,11 @@
 import type { Vault } from "obsidian";
+import { pMap } from "../utils/concurrency";
 import { computeHash } from "../utils/hash";
 import { isExcluded } from "../utils/path";
 import type { LocalFileInfo } from "./comparator";
 import type { SyncVault } from "./engine";
+
+const LIST_FILES_CONCURRENCY = 20;
 
 export class ObsidianVaultAdapter implements SyncVault {
 	private readonly vault: Vault;
@@ -37,23 +40,18 @@ export class ObsidianVaultAdapter implements SyncVault {
 	}
 
 	async listFiles(): Promise<LocalFileInfo[]> {
-		const files = this.vault.getFiles();
-		const result: LocalFileInfo[] = [];
+		const allFiles = this.vault.getFiles();
+		const files = allFiles.filter((f) => !isExcluded(f.path));
 
-		for (const file of files) {
-			if (isExcluded(file.path)) continue;
-
-			const content = await this.vault.cachedRead(file);
-			const contentHash = await computeHash(content);
-
-			result.push({
-				path: file.path,
-				contentHash,
-				size: file.stat.size,
-			});
-		}
-
-		return result;
+		return pMap(
+			files,
+			async (file) => {
+				const content = await this.vault.cachedRead(file);
+				const contentHash = await computeHash(content);
+				return { path: file.path, contentHash, size: file.stat.size };
+			},
+			LIST_FILES_CONCURRENCY,
+		);
 	}
 
 	private async ensureParentDir(filePath: string): Promise<void> {
