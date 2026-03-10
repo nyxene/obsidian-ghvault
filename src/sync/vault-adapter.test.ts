@@ -1,0 +1,277 @@
+import type { TFile, TFolder, Vault } from "obsidian";
+import { describe, expect, it, vi } from "vitest";
+import { ObsidianVaultAdapter } from "./vault-adapter";
+
+vi.mock("../utils/hash", () => ({
+	computeHash: vi
+		.fn()
+		.mockImplementation((content: string) => Promise.resolve(`hash-${content.length}`)),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock Obsidian Vault
+// ---------------------------------------------------------------------------
+
+interface MockFileEntry {
+	path: string;
+	content: string;
+	size: number;
+}
+
+function createMockFile(path: string, size = 100): TFile {
+	const name = path.split("/").pop() ?? path;
+	return {
+		path,
+		name,
+		basename: name.replace(/\.[^.]+$/, ""),
+		extension: name.includes(".") ? (name.split(".").pop() ?? "") : "",
+		stat: { size, ctime: Date.now(), mtime: Date.now() },
+		vault: {},
+		parent: null,
+	} as unknown as TFile;
+}
+
+function createMockVault(files: MockFileEntry[] = []): Vault {
+	const fileMap = new Map<string, MockFileEntry>();
+	const tfiles = new Map<string, TFile>();
+	const folders = new Set<string>();
+
+	for (const f of files) {
+		fileMap.set(f.path, f);
+		tfiles.set(f.path, createMockFile(f.path, f.size));
+	}
+
+	return {
+		getFileByPath: vi.fn((path: string) => tfiles.get(path) ?? null),
+		getFolderByPath: vi.fn((path: string) => {
+			if (folders.has(path)) {
+				return { path } as TFolder;
+			}
+			return null;
+		}),
+		read: vi.fn(async (file: TFile) => {
+			const entry = fileMap.get(file.path);
+			if (!entry) throw new Error(`File not found: ${file.path}`);
+			return entry.content;
+		}),
+		cachedRead: vi.fn(async (file: TFile) => {
+			const entry = fileMap.get(file.path);
+			if (!entry) throw new Error(`File not found: ${file.path}`);
+			return entry.content;
+		}),
+		modify: vi.fn(async (file: TFile, content: string) => {
+			const entry = fileMap.get(file.path);
+			if (entry) {
+				entry.content = content;
+			}
+		}),
+		create: vi.fn(async (path: string, content: string) => {
+			const f: MockFileEntry = { path, content, size: content.length };
+			fileMap.set(path, f);
+			const tf = createMockFile(path, content.length);
+			tfiles.set(path, tf);
+			return tf;
+		}),
+		createFolder: vi.fn(async (path: string) => {
+			folders.add(path);
+		}),
+		trash: vi.fn(async (file: TFile) => {
+			fileMap.delete(file.path);
+			tfiles.delete(file.path);
+		}),
+		getFiles: vi.fn(() => Array.from(tfiles.values())),
+	} as unknown as Vault;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("ObsidianVaultAdapter", () => {
+	describe("readFile", () => {
+		it("reads content from existing file", async () => {
+			const vault = createMockVault([{ path: "notes/hello.md", content: "Hello World", size: 11 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const content = await adapter.readFile("notes/hello.md");
+
+			expect(content).toBe("Hello World");
+			expect(vault.read).toHaveBeenCalled();
+		});
+
+		it("throws when file does not exist", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await expect(adapter.readFile("missing.md")).rejects.toThrow("File not found: missing.md");
+		});
+	});
+
+	describe("writeFile", () => {
+		it("modifies existing file", async () => {
+			const vault = createMockVault([{ path: "doc.md", content: "old content", size: 11 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.writeFile("doc.md", "new content");
+
+			expect(vault.modify).toHaveBeenCalled();
+		});
+
+		it("creates new file when it does not exist", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.writeFile("new-file.md", "fresh content");
+
+			expect(vault.create).toHaveBeenCalledWith("new-file.md", "fresh content");
+		});
+
+		it("ensures parent directory before creating file", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.writeFile("deep/nested/file.md", "content");
+
+			expect(vault.createFolder).toHaveBeenCalledWith("deep/nested");
+			expect(vault.create).toHaveBeenCalledWith("deep/nested/file.md", "content");
+		});
+
+		it("skips folder creation when parent already exists", async () => {
+			const vault = createMockVault([]);
+			// Simulate existing folder
+			vi.mocked(vault.getFolderByPath).mockReturnValue({ path: "existing" } as TFolder);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.writeFile("existing/file.md", "content");
+
+			expect(vault.createFolder).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("deleteFile", () => {
+		it("trashes existing file", async () => {
+			const vault = createMockVault([{ path: "to-delete.md", content: "bye", size: 3 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.deleteFile("to-delete.md");
+
+			expect(vault.trash).toHaveBeenCalled();
+			const trashCall = vi.mocked(vault.trash).mock.calls[0];
+			expect((trashCall[0] as TFile).path).toBe("to-delete.md");
+			expect(trashCall[1]).toBe(false);
+		});
+
+		it("does nothing when file does not exist", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			// Should not throw
+			await adapter.deleteFile("nonexistent.md");
+
+			expect(vault.trash).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("listFiles", () => {
+		it("returns all non-excluded files with content hashes", async () => {
+			const vault = createMockVault([
+				{ path: "note-a.md", content: "aaa", size: 3 },
+				{ path: "note-b.md", content: "bbb", size: 3 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(2);
+			expect(files[0].path).toBe("note-a.md");
+			expect(files[0].contentHash).toBeDefined();
+			expect(files[0].size).toBe(3);
+			expect(files[1].path).toBe("note-b.md");
+		});
+
+		it("excludes .obsidian/ files", async () => {
+			const vault = createMockVault([
+				{ path: ".obsidian/config.json", content: "{}", size: 2 },
+				{ path: "real-note.md", content: "real", size: 4 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].path).toBe("real-note.md");
+		});
+
+		it("excludes .trash/ files", async () => {
+			const vault = createMockVault([
+				{ path: ".trash/old-note.md", content: "old", size: 3 },
+				{ path: "active-note.md", content: "active", size: 6 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].path).toBe("active-note.md");
+		});
+
+		it("excludes ghvault.log", async () => {
+			const vault = createMockVault([
+				{ path: "ghvault.log", content: "log data", size: 8 },
+				{ path: "readme.md", content: "readme", size: 6 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].path).toBe("readme.md");
+		});
+
+		it("returns empty array for empty vault", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toEqual([]);
+		});
+
+		it("excludes multiple excluded patterns simultaneously", async () => {
+			const vault = createMockVault([
+				{ path: ".obsidian/plugins/foo.json", content: "{}", size: 2 },
+				{ path: ".trash/deleted.md", content: "gone", size: 4 },
+				{ path: "ghvault.log", content: "log", size: 3 },
+				{ path: ".ghvault", content: "init", size: 4 },
+				{ path: "notes/real.md", content: "keep", size: 4 },
+				{ path: "todo.md", content: "tasks", size: 5 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			const paths = files.map((f) => f.path);
+			expect(paths).toEqual(["notes/real.md", "todo.md"]);
+		});
+	});
+
+	describe("ensureParentDir", () => {
+		it("creates nested directories for deep paths", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.writeFile("a/b/c/file.md", "content");
+
+			expect(vault.createFolder).toHaveBeenCalledWith("a/b/c");
+		});
+
+		it("skips directory creation for root-level files", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.writeFile("root-file.md", "content");
+
+			expect(vault.createFolder).not.toHaveBeenCalled();
+		});
+	});
+});
