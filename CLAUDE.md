@@ -100,3 +100,7 @@ docs/
 - Never use `fetch` — use `requestUrl()` from Obsidian
 - Never store secrets in code — tokens live in plugin settings (data.json)
 - Never sync `.obsidian/`, `.trash/`, or `ghvault.log` to GitHub
+
+## Security Notes
+
+- Token storage: GitHub PAT is stored in plaintext in Obsidian's `data.json` via `plugin.saveData()`. This is an Obsidian platform limitation — no secure keychain API is available. Mitigations: UI warning advising fine-grained PATs with minimal scopes, password-type input field, token never logged or displayed in UI.

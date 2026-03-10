@@ -73,13 +73,14 @@ describe("SyncStateManager", () => {
 			const storage = createMockStorage(null);
 			const manager = new SyncStateManager(storage);
 
-			manager.setHeadOid("new-oid");
+			const validOid = "b".repeat(40);
+			manager.setHeadOid(validOid);
 			manager.setSHA("test.md", sampleEntry);
 			await manager.save();
 
 			expect(storage.data).toEqual({
 				syncState: {
-					lastRemoteHeadSha: "new-oid",
+					lastRemoteHeadSha: validOid,
 					lastSyncedAt: 0,
 					cache: { "test.md": sampleEntry },
 				},
@@ -91,7 +92,7 @@ describe("SyncStateManager", () => {
 			const manager = new SyncStateManager(storage);
 
 			await manager.load();
-			manager.setHeadOid("oid");
+			manager.setHeadOid("c".repeat(40));
 			await manager.save();
 
 			expect(storage.data?.otherKey).toBe("preserved");
@@ -146,12 +147,40 @@ describe("SyncStateManager", () => {
 	});
 
 	describe("head OID", () => {
-		it("sets and gets head OID", () => {
+		it("sets and gets a valid 40-char hex OID", () => {
+			const manager = new SyncStateManager(createMockStorage());
+			const validOid = "a".repeat(40);
+
+			manager.setHeadOid(validOid);
+
+			expect(manager.getHeadOid()).toBe(validOid);
+		});
+
+		it("allows empty string to reset OID", () => {
 			const manager = new SyncStateManager(createMockStorage());
 
-			manager.setHeadOid("abc123");
+			manager.setHeadOid("");
 
-			expect(manager.getHeadOid()).toBe("abc123");
+			expect(manager.getHeadOid()).toBe("");
+		});
+
+		it("rejects invalid OID format", () => {
+			const manager = new SyncStateManager(createMockStorage());
+
+			expect(() => manager.setHeadOid("not-a-valid-oid")).toThrow("Invalid OID: not-a-valid-oid");
+		});
+
+		it("rejects OID with wrong length", () => {
+			const manager = new SyncStateManager(createMockStorage());
+
+			expect(() => manager.setHeadOid("abc123")).toThrow("Invalid OID: abc123");
+		});
+
+		it("rejects OID with non-hex characters", () => {
+			const manager = new SyncStateManager(createMockStorage());
+			const badOid = "g".repeat(40);
+
+			expect(() => manager.setHeadOid(badOid)).toThrow(`Invalid OID: ${badOid}`);
 		});
 	});
 
@@ -169,7 +198,7 @@ describe("SyncStateManager", () => {
 		it("resets all state to defaults", () => {
 			const manager = new SyncStateManager(createMockStorage());
 
-			manager.setHeadOid("some-oid");
+			manager.setHeadOid("d".repeat(40));
 			manager.setLastSyncedAt(9999);
 			manager.setSHA("file.md", sampleEntry);
 			manager.clear();

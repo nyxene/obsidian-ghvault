@@ -5,7 +5,7 @@ import { LOG_FILE, VALID_LOG_LEVELS } from "../types";
 const MAX_LOG_LINES = 5000;
 const TRIM_TO_LINES = 3000;
 const SECRET_PATTERN =
-	/ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+	/gh[pousx]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 function sanitizeSecrets(text: string): string {
 	return text.replace(SECRET_PATTERN, "[REDACTED]");

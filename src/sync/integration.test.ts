@@ -76,7 +76,7 @@ interface MockRemoteFile {
 
 function createMockGitHubClient(
 	remoteFiles: MockRemoteFile[],
-	headSha = "remote-head-sha",
+	headSha = "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
 ): GitHubClient {
 	const treeEntries = remoteFiles.map((f) => ({
 		path: f.path,
@@ -107,7 +107,7 @@ function createMockGitHubClient(
 // Mock GitHub GraphQL — simulates push boundary
 // ---------------------------------------------------------------------------
 
-function createMockGraphQL(oid = "push-commit-oid"): GitHubGraphQL {
+function createMockGraphQL(oid = "bb11cc22dd33ee44ff55aa00bb11cc22dd33ee44"): GitHubGraphQL {
 	return {
 		createCommit: vi.fn().mockResolvedValue({ oid, url: "https://github.com/commit" }),
 	} as unknown as GitHubGraphQL;
@@ -221,7 +221,7 @@ describe("Sync integration", () => {
 			// Pre-populate state cache with old remote SHA
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "old-head",
+					lastRemoteHeadSha: "1100220033004400550066007700880099001100",
 					lastSyncedAt: 1000,
 					cache: {
 						"doc.md": {
@@ -250,7 +250,7 @@ describe("Sync integration", () => {
 			// File exists in cache but not in remote tree => delete
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "old-head",
+					lastRemoteHeadSha: "1100220033004400550066007700880099001100",
 					lastSyncedAt: 1000,
 					cache: {
 						"deleted.md": {
@@ -299,7 +299,7 @@ describe("Sync integration", () => {
 			// But local content hash differs from cache, so push detects modify.
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "remote-head-sha",
+					lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
 					lastSyncedAt: 1000,
 					cache: {
 						"doc.md": {
@@ -357,7 +357,7 @@ describe("Sync integration", () => {
 			// existing.md is in cache with old remote SHA
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "old-head",
+					lastRemoteHeadSha: "1100220033004400550066007700880099001100",
 					lastSyncedAt: 1000,
 					cache: {
 						"existing.md": {
@@ -395,7 +395,7 @@ describe("Sync integration", () => {
 			// Simulate prior sync: file was synced before, now both sides changed
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "remote-head-sha",
+					lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
 					lastSyncedAt: 1000,
 					cache: {
 						"conflict.md": {
@@ -439,7 +439,7 @@ describe("Sync integration", () => {
 			// conflict.md was synced before; both sides now have changes
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "remote-head-sha",
+					lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
 					lastSyncedAt: 1000,
 					cache: {
 						"conflict.md": {
@@ -522,14 +522,14 @@ describe("Sync integration", () => {
 
 			// Second attempt succeeds
 			vi.mocked(graphql.createCommit).mockResolvedValue({
-				oid: "success-oid",
+				oid: "cc22dd33ee44ff55aa00bb11cc22dd33ee44ff55",
 				url: "https://github.com/commit",
 			});
 
 			const result = await engine.sync();
 
 			expect(result.push?.pushed).toContain("retry.md");
-			expect(result.push?.oid).toBe("success-oid");
+			expect(result.push?.oid).toBe("cc22dd33ee44ff55aa00bb11cc22dd33ee44ff55");
 		});
 
 		it("preserves pull results even when push fails", async () => {

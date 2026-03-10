@@ -208,7 +208,7 @@ export default class GHVaultPlugin extends Plugin {
 
 export function sanitizeErrorForUI(message: string): string {
 	return message.replace(
-		/ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g,
+		/gh[pousx]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g,
 		"[REDACTED]",
 	);
 }
