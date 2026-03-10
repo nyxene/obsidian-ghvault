@@ -133,9 +133,12 @@ export class PushEngine {
 
 function encodeToBase64(content: string): string {
 	const bytes = new TextEncoder().encode(content);
-	let binary = "";
-	for (const byte of bytes) {
-		binary += String.fromCharCode(byte);
+	const chunkSize = 8192;
+	const chunks: string[] = [];
+	for (let i = 0; i < bytes.length; i += chunkSize) {
+		const end = Math.min(i + chunkSize, bytes.length);
+		const slice = bytes.subarray(i, end);
+		chunks.push(String.fromCharCode(...slice));
 	}
-	return btoa(binary);
+	return btoa(chunks.join(""));
 }
