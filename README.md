@@ -57,10 +57,10 @@ Click the GHVault icon in the ribbon or run the **GHVault: Sync** command from t
 
 ```
 ┌─────────────┐         ┌──────────────┐         ┌──────────┐
-│  Obsidian    │         │   GHVault    │         │  GitHub  │
-│  Vault       │◄───────►│   Plugin     │◄───────►│  API     │
-│  (files)     │  read/  │  (sync       │  REST/  │  (repo)  │
-│              │  write  │   engine)    │  GQL    │          │
+│  Obsidian   │         │   GHVault    │         │  GitHub  │
+│  Vault      │◄───────►│   Plugin     │◄───────►│  API     │
+│  (files)    │  read/  │   (sync      │  REST/  │  (repo)  │
+│             │  write  │   engine)    │  GQL    │          │
 └─────────────┘         └──────────────┘         └──────────┘
 ```
 
@@ -118,14 +118,14 @@ npm install
 ### Commands
 
 ```bash
-npm run dev          # Build in watch mode
-npm run build        # Production build
-npm run lint         # Lint with Biome
-npm run format       # Auto-fix lint issues
-npm run type-check   # TypeScript type checking
-npm run test         # Run tests
+npm run dev           # Build in watch mode
+npm run build         # Production build
+npm run lint          # Lint with Biome
+npm run format        # Auto-fix lint issues
+npm run type-check    # TypeScript type checking
+npm run test          # Run tests
 npm run test:coverage # Tests with coverage report
-npm run test:bench   # Run benchmarks
+npm run test:bench    # Run benchmarks
 ```
 
 ### Project structure
