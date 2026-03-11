@@ -4,7 +4,7 @@ import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { pMap } from "../utils/concurrency";
 import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
-import { isSafePath, toVaultPath } from "../utils/path";
+import { isSafePath, toRepoPath, toVaultPath } from "../utils/path";
 import { computeRemoteChanges } from "./comparator";
 import type { SyncStateManager } from "./state";
 
@@ -84,8 +84,9 @@ export class PullEngine {
 		} catch (error: unknown) {
 			if (error instanceof GitHubEmptyRepoError) {
 				this.logger.info("Repository is empty — initializing");
+				const initPath = toRepoPath(".ghvault", this.syncFolder);
 				const init = await this.client.createFile(
-					".ghvault",
+					initPath,
 					"initialized",
 					"chore: initialize repository",
 					branch,

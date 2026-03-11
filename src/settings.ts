@@ -18,6 +18,35 @@ export function sanitizeSyncFolder(value: string): string {
 	return segments.join("/");
 }
 
+export interface SyncFolderValidation {
+	sanitized: string;
+	hasTraversal: boolean;
+}
+
+export function validateSyncFolder(value: string): SyncFolderValidation {
+	const normalized = normalizePath(value);
+	const segments = normalized.split("/").filter((s) => s !== "");
+	const hasTraversal = segments.some((s) => s === "..");
+	const clean = segments.filter((s) => s !== "..").join("/");
+	return { sanitized: clean, hasTraversal };
+}
+
+const SYNC_FOLDER_HINT = "Relative path using forward slashes, e.g. docs/vault";
+
+function syncFolderDesc(rawValue: string): string {
+	if (!rawValue.trim()) {
+		return "Folder inside the repo to sync. Leave empty to sync entire repo.";
+	}
+	const validation = validateSyncFolder(rawValue);
+	if (validation.hasTraversal) {
+		return `⚠ Path must not contain "..". Resolved: ${validation.sanitized || "(empty)"}. ${SYNC_FOLDER_HINT}`;
+	}
+	if (validation.sanitized !== rawValue) {
+		return `Will sync: ${validation.sanitized}/. ${SYNC_FOLDER_HINT}`;
+	}
+	return `Will sync: ${validation.sanitized}/`;
+}
+
 export interface SettingTabCallbacks {
 	onSave: (settings: GHVaultSettings) => Promise<void>;
 	onTestConnection: () => Promise<void>;
@@ -110,18 +139,17 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		new Setting(containerEl)
+		const syncFolderSetting = new Setting(containerEl)
 			.setName("Sync folder")
-			.setDesc(
-				"Folder path inside the GitHub repository to sync with. Leave empty to sync entire repo.",
-			)
+			.setDesc(syncFolderDesc(this.settings.syncFolder))
 			.addText((text) =>
 				text
 					.setPlaceholder("docs/vault")
 					.setValue(this.settings.syncFolder)
 					.onChange(async (value) => {
-						this.settings.syncFolder = sanitizeSyncFolder(value);
-						text.setValue(this.settings.syncFolder);
+						const validation = validateSyncFolder(value);
+						this.settings.syncFolder = validation.sanitized;
+						syncFolderSetting.setDesc(syncFolderDesc(value));
 						await this.callbacks.onSave(this.settings);
 					}),
 			);

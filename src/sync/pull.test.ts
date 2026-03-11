@@ -302,7 +302,7 @@ describe("PullEngine", () => {
 		expect(state.setSHA).not.toHaveBeenCalled();
 	});
 
-	it("initializes empty repo with .ghvault file", async () => {
+	it("initializes empty repo with .ghvault file at repo root", async () => {
 		const client = createMockClient();
 		vi.mocked(client.getRef).mockRejectedValue(new GitHubEmptyRepoError());
 		(client as unknown as Record<string, unknown>).createFile = vi
@@ -322,6 +322,27 @@ describe("PullEngine", () => {
 		expect(result.created).toEqual([]);
 		expect(result.modified).toEqual([]);
 		expect(result.deleted).toEqual([]);
+	});
+
+	it("initializes empty repo with .ghvault inside syncFolder", async () => {
+		const client = createMockClient();
+		vi.mocked(client.getRef).mockRejectedValue(new GitHubEmptyRepoError());
+		(client as unknown as Record<string, unknown>).createFile = vi
+			.fn()
+			.mockResolvedValue({ sha: "file-sha", commitSha: "init-commit-sha" });
+		const state = createMockState();
+		const { engine } = createEngine({ client, state, syncFolder: "docs/vault" });
+
+		await engine.pull("main");
+
+		expect(
+			(client as unknown as { createFile: ReturnType<typeof vi.fn> }).createFile,
+		).toHaveBeenCalledWith(
+			"docs/vault/.ghvault",
+			"initialized",
+			"chore: initialize repository",
+			"main",
+		);
 	});
 
 	it("logs warning when tree response is truncated", async () => {

@@ -6,6 +6,7 @@ import {
 	sanitizeBranch,
 	sanitizeSlug,
 	sanitizeSyncFolder,
+	validateSyncFolder,
 } from "./settings";
 import type { GHVaultSettings } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
@@ -187,6 +188,48 @@ describe("sanitizeSyncFolder", () => {
 });
 
 // ---------------------------------------------------------------------------
+// validateSyncFolder
+// ---------------------------------------------------------------------------
+
+describe("validateSyncFolder", () => {
+	it("returns sanitized path and no traversal for valid input", () => {
+		const result = validateSyncFolder("docs/vault");
+		expect(result.sanitized).toBe("docs/vault");
+		expect(result.hasTraversal).toBe(false);
+	});
+
+	it("detects path traversal", () => {
+		const result = validateSyncFolder("../etc/passwd");
+		expect(result.sanitized).toBe("etc/passwd");
+		expect(result.hasTraversal).toBe(true);
+	});
+
+	it("detects traversal in middle of path", () => {
+		const result = validateSyncFolder("docs/../../secret");
+		expect(result.sanitized).toBe("docs/secret");
+		expect(result.hasTraversal).toBe(true);
+	});
+
+	it("handles empty string", () => {
+		const result = validateSyncFolder("");
+		expect(result.sanitized).toBe("");
+		expect(result.hasTraversal).toBe(false);
+	});
+
+	it("normalizes slashes without flagging traversal", () => {
+		const result = validateSyncFolder("/docs//vault/");
+		expect(result.sanitized).toBe("docs/vault");
+		expect(result.hasTraversal).toBe(false);
+	});
+
+	it("handles only traversal segments", () => {
+		const result = validateSyncFolder("../../..");
+		expect(result.sanitized).toBe("");
+		expect(result.hasTraversal).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // GHVaultSettingTab
 // ---------------------------------------------------------------------------
 
@@ -320,6 +363,71 @@ describe("GHVaultSettingTab", () => {
 			await syncFolderSetting.textComponents[0].simulateChange("/docs/../vault/");
 			expect(settings.syncFolder).toBe("docs/vault");
 			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("does not overwrite syncFolder input field on change (allows typing slashes)", async () => {
+			const { tab } = createTab({ syncFolder: "" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			const textComponent = syncFolderSetting.textComponents[0];
+			const setValueSpy = vi.spyOn(textComponent, "setValue");
+			// Clear the initial setValue call from display()
+			setValueSpy.mockClear();
+			await textComponent.simulateChange("docs/");
+			// setValue should NOT be called after onChange — user must be able to type slashes
+			expect(setValueSpy).not.toHaveBeenCalled();
+		});
+
+		it("shows default desc for empty syncFolder", () => {
+			const { tab } = createTab({ syncFolder: "" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			expect(syncFolderSetting.getDesc()).toContain("Leave empty to sync entire repo");
+		});
+
+		it("shows resolved path in syncFolder desc for valid input", async () => {
+			const { tab } = createTab({ syncFolder: "" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			await syncFolderSetting.textComponents[0].simulateChange("docs/vault");
+			expect(syncFolderSetting.getDesc()).toContain("Will sync: docs/vault/");
+		});
+
+		it("shows traversal warning in syncFolder desc", async () => {
+			const { tab } = createTab({ syncFolder: "" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			await syncFolderSetting.textComponents[0].simulateChange("../etc/passwd");
+			expect(syncFolderSetting.getDesc()).toContain("..");
+			expect(syncFolderSetting.getDesc()).toContain("etc/passwd");
+		});
+
+		it("shows hint when input is normalized differently", async () => {
+			const { tab } = createTab({ syncFolder: "" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			await syncFolderSetting.textComponents[0].simulateChange("/docs/");
+			expect(syncFolderSetting.getDesc()).toContain("Will sync: docs/");
+			expect(syncFolderSetting.getDesc()).toContain("forward slashes");
+		});
+
+		it("shows pre-filled syncFolder desc on display", () => {
+			const { tab } = createTab({ syncFolder: "notes/vault" });
+			tab.display();
+			const syncFolderSetting = findSettingByName("Sync folder");
+			expect(syncFolderSetting.getDesc()).toContain("Will sync: notes/vault/");
+		});
+
+		it("overwrites owner input field on change (sanitization feedback)", async () => {
+			const { tab } = createTab({ owner: "" });
+			tab.display();
+			const ownerSetting = findSettingByName("Repository owner");
+			const textComponent = ownerSetting.textComponents[0];
+			const setValueSpy = vi.spyOn(textComponent, "setValue");
+			setValueSpy.mockClear();
+			await textComponent.simulateChange("my owner");
+			// owner DOES call setValue to strip invalid chars
+			expect(setValueSpy).toHaveBeenCalledWith("myowner");
 		});
 
 		it("saves valid logLevel on change", async () => {
