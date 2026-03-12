@@ -65,6 +65,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		containerEl.addClass("ghvault-settings");
 
 		new Setting(containerEl)
 			.setName("GitHub token")

@@ -18,6 +18,7 @@ interface FakeEl {
 	style: FakeStyle;
 	children: FakeEl[];
 	empty(): void;
+	addClass(cls: string): void;
 	createEl(tag: string, opts?: { cls?: string; text?: string }): FakeEl;
 	setText(text: string): void;
 	querySelector(selector: string): FakeEl | null;
@@ -35,6 +36,9 @@ function createFakeEl(tag: string): FakeEl {
 		empty() {
 			this.children = [];
 			this.textContent = "";
+		},
+		addClass(cls: string) {
+			this.className = this.className ? `${this.className} ${cls}` : cls;
 		},
 		createEl(t: string, opts?: { cls?: string; text?: string }): FakeEl {
 			const child = createFakeEl(t);
