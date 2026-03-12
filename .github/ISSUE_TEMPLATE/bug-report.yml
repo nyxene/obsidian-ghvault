@@ -1,6 +1,7 @@
 name: Bug Report
 description: Report a bug with GHVault
 labels: ["bug"]
+assignees: ["nyxene"]
 body:
   - type: markdown
     attributes:
