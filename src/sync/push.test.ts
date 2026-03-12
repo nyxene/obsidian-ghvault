@@ -46,12 +46,30 @@ const commitOptions = {
 	message: "sync: update vault",
 };
 
+function createPushEngine(
+	overrides: {
+		graphql?: GitHubGraphQL;
+		state?: SyncStateManager;
+		vault?: VaultReader;
+		logger?: Logger;
+		syncFolder?: string;
+	} = {},
+): PushEngine {
+	return new PushEngine({
+		graphql: overrides.graphql ?? createMockGraphQL(),
+		state: overrides.state ?? createMockState(),
+		vault: overrides.vault ?? createMockVault(),
+		logger: overrides.logger ?? createMockLogger(),
+		syncFolder: overrides.syncFolder ?? "",
+	});
+}
+
 describe("PushEngine", () => {
 	it("skips push when no changes", async () => {
 		const graphql = createMockGraphQL();
 		const state = createMockState();
 		const vault = createMockVault();
-		const engine = new PushEngine({ graphql, state, vault, logger: createMockLogger() });
+		const engine = createPushEngine({ graphql, state, vault });
 
 		const result = await engine.push([], commitOptions);
 
@@ -65,7 +83,7 @@ describe("PushEngine", () => {
 		const graphql = createMockGraphQL();
 		const state = createMockState();
 		const vault = createMockVault();
-		const engine = new PushEngine({ graphql, state, vault, logger: createMockLogger() });
+		const engine = createPushEngine({ graphql, state, vault });
 
 		const changes: FileChange[] = [{ path: "new.md", type: "create" }];
 		const result = await engine.push(changes, commitOptions);
@@ -86,7 +104,7 @@ describe("PushEngine", () => {
 		const graphql = createMockGraphQL();
 		const state = createMockState();
 		const vault = createMockVault();
-		const engine = new PushEngine({ graphql, state, vault, logger: createMockLogger() });
+		const engine = createPushEngine({ graphql, state, vault });
 
 		const changes: FileChange[] = [{ path: "doc.md", type: "modify" }];
 		const result = await engine.push(changes, commitOptions);
@@ -99,7 +117,7 @@ describe("PushEngine", () => {
 		const graphql = createMockGraphQL();
 		const state = createMockState();
 		const vault = createMockVault();
-		const engine = new PushEngine({ graphql, state, vault, logger: createMockLogger() });
+		const engine = createPushEngine({ graphql, state, vault });
 
 		const changes: FileChange[] = [{ path: "old.md", type: "delete" }];
 		const result = await engine.push(changes, commitOptions);
@@ -118,7 +136,7 @@ describe("PushEngine", () => {
 		const graphql = createMockGraphQL();
 		const state = createMockState();
 		const vault = createMockVault();
-		const engine = new PushEngine({ graphql, state, vault, logger: createMockLogger() });
+		const engine = createPushEngine({ graphql, state, vault });
 
 		const changes: FileChange[] = [
 			{ path: "new.md", type: "create" },
@@ -142,12 +160,7 @@ describe("PushEngine", () => {
 
 	it("updates SHA cache after push", async () => {
 		const state = createMockState();
-		const engine = new PushEngine({
-			graphql: createMockGraphQL(),
-			state,
-			vault: createMockVault(),
-			logger: createMockLogger(),
-		});
+		const engine = createPushEngine({ state });
 
 		const changes: FileChange[] = [
 			{ path: "added.md", type: "create" },
@@ -161,12 +174,7 @@ describe("PushEngine", () => {
 
 	it("updates head OID and saves state", async () => {
 		const state = createMockState();
-		const engine = new PushEngine({
-			graphql: createMockGraphQL(),
-			state,
-			vault: createMockVault(),
-			logger: createMockLogger(),
-		});
+		const engine = createPushEngine({ state });
 
 		await engine.push([{ path: "f.md", type: "create" }], commitOptions);
 
@@ -178,12 +186,7 @@ describe("PushEngine", () => {
 	it("uses correct head OID as expectedHeadOid", async () => {
 		const graphql = createMockGraphQL();
 		const state = createMockState("specific-head-oid");
-		const engine = new PushEngine({
-			graphql,
-			state,
-			vault: createMockVault(),
-			logger: createMockLogger(),
-		});
+		const engine = createPushEngine({ graphql, state });
 
 		await engine.push([{ path: "f.md", type: "create" }], commitOptions);
 
@@ -197,7 +200,7 @@ describe("PushEngine", () => {
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, state, vault, logger });
 
 		const changes: FileChange[] = [
 			{ path: "../etc/passwd", type: "create" },
@@ -226,7 +229,7 @@ describe("PushEngine", () => {
 			if (path === "huge.bin") return Promise.resolve(bigContent);
 			return Promise.resolve(`content of ${path}`);
 		});
-		const engine = new PushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, state, vault, logger });
 
 		const changes: FileChange[] = [
 			{ path: "huge.bin", type: "create" },
@@ -246,7 +249,7 @@ describe("PushEngine", () => {
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, state, vault, logger });
 
 		const changes: FileChange[] = [
 			{ path: "../etc/passwd", type: "create" },
@@ -271,7 +274,7 @@ describe("PushEngine", () => {
 			if (path === "huge.bin") return Promise.resolve(bigContent);
 			return Promise.resolve(`content of ${path}`);
 		});
-		const engine = new PushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, state, vault, logger });
 
 		const changes: FileChange[] = [
 			{ path: "../etc/passwd", type: "create" },
@@ -296,7 +299,7 @@ describe("PushEngine", () => {
 			if (path === "large.bin") return Promise.resolve(largeContent);
 			return Promise.resolve(`content of ${path}`);
 		});
-		const engine = new PushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, state, vault, logger });
 
 		const changes: FileChange[] = [
 			{ path: "large.bin", type: "create" },
@@ -325,7 +328,7 @@ describe("PushEngine", () => {
 			if (path === "medium.bin") return Promise.resolve(justUnderContent);
 			return Promise.resolve(`content of ${path}`);
 		});
-		const engine = new PushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, state, vault, logger });
 
 		const changes: FileChange[] = [{ path: "medium.bin", type: "create" }];
 		const result = await engine.push(changes, commitOptions);
@@ -337,17 +340,71 @@ describe("PushEngine", () => {
 		const graphql = createMockGraphQL();
 		const vault = createMockVault();
 		vi.mocked(vault.readFile).mockResolvedValue("hello world");
-		const engine = new PushEngine({
-			graphql,
-			state: createMockState(),
-			vault,
-			logger: createMockLogger(),
-		});
+		const engine = createPushEngine({ graphql, vault });
 
 		await engine.push([{ path: "f.md", type: "create" }], commitOptions);
 
 		const call = vi.mocked(graphql.createCommit).mock.calls[0][0];
 		const decoded = atob(call.additions[0].base64Content);
 		expect(decoded).toBe("hello world");
+	});
+
+	describe("syncFolder support", () => {
+		it("maps vault paths to repo paths in commit additions", async () => {
+			const graphql = createMockGraphQL();
+			const vault = createMockVault();
+			const engine = createPushEngine({ graphql, vault, syncFolder: "docs" });
+
+			const changes: FileChange[] = [{ path: "notes/hello.md", type: "create" }];
+			const result = await engine.push(changes, commitOptions);
+
+			expect(result.pushed).toEqual(["notes/hello.md"]);
+			expect(graphql.createCommit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additions: [expect.objectContaining({ path: "docs/notes/hello.md" })],
+				}),
+			);
+		});
+
+		it("maps vault paths to repo paths in commit deletions", async () => {
+			const graphql = createMockGraphQL();
+			const engine = createPushEngine({ graphql, syncFolder: "docs" });
+
+			const changes: FileChange[] = [{ path: "old.md", type: "delete" }];
+			const result = await engine.push(changes, commitOptions);
+
+			expect(result.deleted).toEqual(["old.md"]);
+			expect(graphql.createCommit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					deletions: [{ path: "docs/old.md" }],
+				}),
+			);
+		});
+
+		it("stores cache entries with vault paths (not repo paths)", async () => {
+			const state = createMockState();
+			const engine = createPushEngine({ state, syncFolder: "docs" });
+
+			const changes: FileChange[] = [{ path: "note.md", type: "create" }];
+			await engine.push(changes, commitOptions);
+
+			// Cache key should be vault path, not repo path
+			expect(state.setSHA).toHaveBeenCalledWith("note.md", expect.any(Object));
+			expect(state.setSHA).not.toHaveBeenCalledWith("docs/note.md", expect.any(Object));
+		});
+
+		it("empty syncFolder preserves paths as-is (backward compatible)", async () => {
+			const graphql = createMockGraphQL();
+			const engine = createPushEngine({ graphql, syncFolder: "" });
+
+			const changes: FileChange[] = [{ path: "notes/hello.md", type: "create" }];
+			await engine.push(changes, commitOptions);
+
+			expect(graphql.createCommit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additions: [expect.objectContaining({ path: "notes/hello.md" })],
+				}),
+			);
+		});
 	});
 });

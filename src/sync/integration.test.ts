@@ -167,6 +167,7 @@ function createIntegrationSetup(options: {
 	remoteFiles?: MockRemoteFile[];
 	headSha?: string;
 	pushOid?: string;
+	syncFolder?: string;
 }): IntegrationSetup {
 	const vault = createMockVaultAdapter(options.localFiles ?? []);
 	const client = createMockGitHubClient(options.remoteFiles ?? [], options.headSha);
@@ -174,9 +175,10 @@ function createIntegrationSetup(options: {
 	const storage = createInMemoryStorage();
 	const state = new SyncStateManager(storage);
 	const logger = createMockLogger();
+	const syncFolder = options.syncFolder ?? "";
 
-	const pullEngine = new PullEngine({ client, state, vault, logger });
-	const pushEngine = new PushEngine({ graphql, state, vault, logger });
+	const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder });
+	const pushEngine = new PushEngine({ graphql, state, vault, logger, syncFolder });
 
 	const engine = new SyncEngine({
 		pullEngine,
@@ -560,8 +562,8 @@ describe("Sync integration", () => {
 			const state = new SyncStateManager(storage);
 			const logger = createMockLogger();
 
-			const pullEngine = new PullEngine({ client, state, vault, logger });
-			const pushEngine = new PushEngine({ graphql, state, vault, logger });
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({ graphql, state, vault, logger, syncFolder: "" });
 
 			const engine = new SyncEngine({
 				pullEngine,
@@ -597,6 +599,95 @@ describe("Sync integration", () => {
 			expect(second.pull.modified).toHaveLength(0);
 			expect(second.pull.deleted).toHaveLength(0);
 			expect(second.push).toBeNull();
+		});
+	});
+
+	describe("syncFolder — full sync cycle with subfolder", () => {
+		it("pulls only files inside syncFolder and maps paths to vault", async () => {
+			const { engine, vault } = createIntegrationSetup({
+				remoteFiles: [
+					{ path: "docs/notes/hello.md", sha: "sha-hello", content: "Hello", size: 5 },
+					{ path: "docs/readme.md", sha: "sha-readme", content: "README", size: 6 },
+					{ path: "other/outside.md", sha: "sha-outside", content: "Outside", size: 7 },
+				],
+				syncFolder: "docs",
+			});
+
+			const result = await engine.sync();
+
+			// Only files inside docs/ should appear, with vault-relative paths
+			expect(result.pull.created).toContain("notes/hello.md");
+			expect(result.pull.created).toContain("readme.md");
+			expect(result.pull.created).not.toContain("other/outside.md");
+			expect(result.pull.created).not.toContain("docs/notes/hello.md");
+
+			expect(vault.files.get("notes/hello.md")).toBe("Hello");
+			expect(vault.files.get("readme.md")).toBe("README");
+			expect(vault.files.has("other/outside.md")).toBe(false);
+		});
+
+		it("pushes local files with syncFolder prefix in commit", async () => {
+			const { engine, graphql } = createIntegrationSetup({
+				localFiles: [{ path: "note.md", content: "local note" }],
+				remoteFiles: [],
+				syncFolder: "docs",
+			});
+
+			const result = await engine.sync();
+
+			expect(result.push).not.toBeNull();
+			expect(result.push?.pushed).toContain("note.md");
+			expect(graphql.createCommit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additions: expect.arrayContaining([expect.objectContaining({ path: "docs/note.md" })]),
+				}),
+			);
+		});
+
+		it("full round-trip: pull from syncFolder then push local changes", async () => {
+			const { engine, vault, graphql } = createIntegrationSetup({
+				localFiles: [{ path: "local-only.md", content: "local content" }],
+				remoteFiles: [
+					{ path: "docs/remote-only.md", sha: "sha-remote", content: "remote content", size: 14 },
+					{ path: "root-file.md", sha: "sha-root", content: "root", size: 4 },
+				],
+				syncFolder: "docs",
+			});
+
+			const result = await engine.sync();
+
+			// Pull: only docs/remote-only.md pulled as remote-only.md
+			expect(result.pull.created).toContain("remote-only.md");
+			expect(result.pull.created).not.toContain("root-file.md");
+			expect(vault.files.get("remote-only.md")).toBe("remote content");
+
+			// Push: local-only.md pushed as docs/local-only.md
+			expect(result.push).not.toBeNull();
+			expect(result.push?.pushed).toContain("local-only.md");
+			expect(graphql.createCommit).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additions: expect.arrayContaining([
+						expect.objectContaining({ path: "docs/local-only.md" }),
+					]),
+				}),
+			);
+		});
+
+		it("empty syncFolder syncs entire repo (backward compatible)", async () => {
+			const { engine, vault } = createIntegrationSetup({
+				remoteFiles: [
+					{ path: "notes/hello.md", sha: "sha-hello", content: "Hello", size: 5 },
+					{ path: "other/file.md", sha: "sha-other", content: "Other", size: 5 },
+				],
+				syncFolder: "",
+			});
+
+			const result = await engine.sync();
+
+			expect(result.pull.created).toContain("notes/hello.md");
+			expect(result.pull.created).toContain("other/file.md");
+			expect(vault.files.get("notes/hello.md")).toBe("Hello");
+			expect(vault.files.get("other/file.md")).toBe("Other");
 		});
 	});
 });

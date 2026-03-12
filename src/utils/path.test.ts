@@ -20,11 +20,11 @@ describe("normalizePath", () => {
 });
 
 describe("toRepoPath", () => {
-	it("prepends repoPrefix", () => {
+	it("prepends syncFolder", () => {
 		expect(toRepoPath("notes/daily.md", "docs")).toBe("docs/notes/daily.md");
 	});
 
-	it("returns vault path when repoPrefix is empty", () => {
+	it("returns vault path when syncFolder is empty", () => {
 		expect(toRepoPath("notes/daily.md", "")).toBe("notes/daily.md");
 	});
 
@@ -34,15 +34,15 @@ describe("toRepoPath", () => {
 });
 
 describe("toVaultPath", () => {
-	it("strips repoPrefix", () => {
+	it("strips syncFolder", () => {
 		expect(toVaultPath("docs/notes/daily.md", "docs")).toBe("notes/daily.md");
 	});
 
-	it("returns path as-is when repoPrefix is empty", () => {
+	it("returns path as-is when syncFolder is empty", () => {
 		expect(toVaultPath("notes/daily.md", "")).toBe("notes/daily.md");
 	});
 
-	it("returns null when path does not start with repoPrefix", () => {
+	it("returns null when path does not start with syncFolder", () => {
 		expect(toVaultPath("other/file.md", "docs")).toBeNull();
 	});
 

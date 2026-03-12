@@ -30,9 +30,13 @@ export default class GHVaultPlugin extends Plugin {
 		this.addSettingTab(
 			new GHVaultSettingTab(this.app, this, this.settings, {
 				onSave: async (settings) => {
+					const prevSyncFolder = this.settings.syncFolder;
 					this.settings = settings;
 					await this.saveSettings();
 					this.logger?.setLevel(settings.logLevel);
+					if (settings.syncFolder !== prevSyncFolder) {
+						await this.clearSyncState();
+					}
 					this.rebuildSyncEngine();
 				},
 				onTestConnection: () => this.testConnection(),
@@ -64,7 +68,7 @@ export default class GHVaultPlugin extends Plugin {
 	}
 
 	private rebuildSyncEngine(): void {
-		const { githubToken, owner, repo, branch } = this.settings;
+		const { githubToken, owner, repo, branch, syncFolder } = this.settings;
 		if (!githubToken || !owner || !repo) {
 			this.syncEngine = null;
 			return;
@@ -99,6 +103,7 @@ export default class GHVaultPlugin extends Plugin {
 			state,
 			vault: vaultAdapter,
 			logger,
+			syncFolder,
 		});
 
 		const pushEngine = new PushEngine({
@@ -106,6 +111,7 @@ export default class GHVaultPlugin extends Plugin {
 			state,
 			vault: vaultAdapter,
 			logger,
+			syncFolder,
 		});
 
 		this.syncEngine = new SyncEngine({
@@ -203,6 +209,16 @@ export default class GHVaultPlugin extends Plugin {
 		const data = (await this.loadData()) || {};
 		data.settings = this.settings;
 		await this.saveData(data);
+	}
+
+	private async clearSyncState(): Promise<void> {
+		const state = new SyncStateManager({
+			loadData: () => this.loadData(),
+			saveData: (data) => this.saveData(data),
+		});
+		state.clear();
+		await state.save();
+		this.logger?.info("Sync state cleared (syncFolder changed)");
 	}
 }
 

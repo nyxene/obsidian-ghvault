@@ -80,12 +80,18 @@ function createMockLogger(): Logger {
 }
 
 function createEngine(
-	overrides: { client?: GitHubClient; state?: SyncStateManager; vault?: VaultAdapter } = {},
+	overrides: {
+		client?: GitHubClient;
+		state?: SyncStateManager;
+		vault?: VaultAdapter;
+		syncFolder?: string;
+	} = {},
 ): { engine: PullEngine; client: GitHubClient; state: SyncStateManager; vault: VaultAdapter } {
 	const client = overrides.client ?? createMockClient();
 	const state = overrides.state ?? createMockState();
 	const vault = overrides.vault ?? createMockVault();
-	const engine = new PullEngine({ client, state, vault, logger: createMockLogger() });
+	const syncFolder = overrides.syncFolder ?? "";
+	const engine = new PullEngine({ client, state, vault, logger: createMockLogger(), syncFolder });
 	return { engine, client, state, vault };
 }
 
@@ -224,7 +230,7 @@ describe("PullEngine", () => {
 		const state = createMockState({});
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PullEngine({ client, state, vault, logger });
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
 
 		const result = await engine.pull("main");
 
@@ -247,7 +253,7 @@ describe("PullEngine", () => {
 		const state = createMockState({});
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PullEngine({ client, state, vault, logger });
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
 
 		const result = await engine.pull("main");
 
@@ -281,7 +287,7 @@ describe("PullEngine", () => {
 		const state = createMockState({});
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PullEngine({ client, state, vault, logger });
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
 
 		const result = await engine.pull("main");
 
@@ -296,7 +302,7 @@ describe("PullEngine", () => {
 		expect(state.setSHA).not.toHaveBeenCalled();
 	});
 
-	it("initializes empty repo with .ghvault file", async () => {
+	it("initializes empty repo with .ghvault file at repo root", async () => {
 		const client = createMockClient();
 		vi.mocked(client.getRef).mockRejectedValue(new GitHubEmptyRepoError());
 		(client as unknown as Record<string, unknown>).createFile = vi
@@ -318,6 +324,27 @@ describe("PullEngine", () => {
 		expect(result.deleted).toEqual([]);
 	});
 
+	it("initializes empty repo with .ghvault inside syncFolder", async () => {
+		const client = createMockClient();
+		vi.mocked(client.getRef).mockRejectedValue(new GitHubEmptyRepoError());
+		(client as unknown as Record<string, unknown>).createFile = vi
+			.fn()
+			.mockResolvedValue({ sha: "file-sha", commitSha: "init-commit-sha" });
+		const state = createMockState();
+		const { engine } = createEngine({ client, state, syncFolder: "docs/vault" });
+
+		await engine.pull("main");
+
+		expect(
+			(client as unknown as { createFile: ReturnType<typeof vi.fn> }).createFile,
+		).toHaveBeenCalledWith(
+			"docs/vault/.ghvault",
+			"initialized",
+			"chore: initialize repository",
+			"main",
+		);
+	});
+
 	it("logs warning when tree response is truncated", async () => {
 		const client = createMockClient([{ path: "file.md", sha: "sha-1" }]);
 		vi.mocked(client.getTree).mockResolvedValue({
@@ -327,7 +354,7 @@ describe("PullEngine", () => {
 		const state = createMockState({});
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PullEngine({ client, state, vault, logger });
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
 
 		await engine.pull("main");
 
@@ -340,7 +367,7 @@ describe("PullEngine", () => {
 		const state = createMockState({});
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const engine = new PullEngine({ client, state, vault, logger });
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
 
 		const result = await engine.pull("main");
 
@@ -416,6 +443,121 @@ describe("PullEngine", () => {
 			const { engine } = createEngine({ client, state });
 
 			await expect(engine.updateCacheFromCommit("commit-oid")).rejects.toThrow("server error");
+		});
+	});
+
+	describe("syncFolder support", () => {
+		it("filters tree entries to only files inside syncFolder", async () => {
+			const client = createMockClient([
+				{ path: "docs/notes/hello.md", sha: "sha-hello" },
+				{ path: "docs/readme.md", sha: "sha-readme" },
+				{ path: "other/outside.md", sha: "sha-outside" },
+			]);
+			const state = createMockState({});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault, syncFolder: "docs" });
+
+			const result = await engine.pull("main");
+
+			// Only files inside docs/ should be pulled, mapped to vault paths
+			expect(result.created).toContain("notes/hello.md");
+			expect(result.created).toContain("readme.md");
+			expect(result.created).not.toContain("other/outside.md");
+			expect(vault.writeFile).toHaveBeenCalledWith("notes/hello.md", expect.any(String));
+			expect(vault.writeFile).toHaveBeenCalledWith("readme.md", expect.any(String));
+			expect(vault.writeFile).not.toHaveBeenCalledWith("other/outside.md", expect.any(String));
+		});
+
+		it("uses repo path for API calls when syncFolder is set", async () => {
+			const client = createMockClient([{ path: "docs/note.md", sha: "sha-note" }]);
+			const state = createMockState({});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault, syncFolder: "docs" });
+
+			await engine.pull("main");
+
+			// API call should use repo path (docs/note.md), not vault path (note.md)
+			expect(client.getFileContent).toHaveBeenCalledWith("docs/note.md", "main");
+		});
+
+		it("stores cache entries with vault paths when syncFolder is set", async () => {
+			const client = createMockClient([{ path: "docs/note.md", sha: "sha-note" }]);
+			const state = createMockState({});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault, syncFolder: "docs" });
+
+			await engine.pull("main");
+
+			// Cache should use vault path (note.md), not repo path (docs/note.md)
+			expect(state.setSHA).toHaveBeenCalledWith(
+				"note.md",
+				expect.objectContaining({ remoteSha: "sha-note" }),
+			);
+			expect(state.setSHA).not.toHaveBeenCalledWith("docs/note.md", expect.anything());
+		});
+
+		it("empty syncFolder syncs entire repo (backward compatible)", async () => {
+			const client = createMockClient([
+				{ path: "notes/hello.md", sha: "sha-hello" },
+				{ path: "other/file.md", sha: "sha-other" },
+			]);
+			const state = createMockState({});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault, syncFolder: "" });
+
+			const result = await engine.pull("main");
+
+			expect(result.created).toContain("notes/hello.md");
+			expect(result.created).toContain("other/file.md");
+		});
+
+		it("getRemoteChanges respects syncFolder", async () => {
+			const client = createMockClient([
+				{ path: "docs/inside.md", sha: "sha-inside" },
+				{ path: "outside.md", sha: "sha-outside" },
+			]);
+			const state = createMockState({});
+			const { engine } = createEngine({ client, state, syncFolder: "docs" });
+
+			const changes = await engine.getRemoteChanges("main");
+
+			const paths = changes.map((c) => c.path);
+			expect(paths).toContain("inside.md");
+			expect(paths).not.toContain("outside.md");
+			expect(paths).not.toContain("docs/inside.md");
+		});
+
+		it("updateCacheFromCommit maps repo paths to vault paths with syncFolder", async () => {
+			const client = createMockClient([
+				{ path: "docs/a.md", sha: "new-sha-a" },
+				{ path: "outside.md", sha: "sha-out" },
+			]);
+			const state = createMockState({
+				"a.md": { remoteSha: "old-sha-a" },
+			});
+			(state as unknown as Record<string, unknown>).getSHA = vi.fn((path: string) => {
+				if (path === "a.md") {
+					return {
+						remoteSha: "old-sha-a",
+						localContentHash: "",
+						lastSyncedAt: 1000,
+						size: 100,
+						isBinary: false,
+					};
+				}
+				return undefined;
+			});
+			const { engine } = createEngine({ client, state, syncFolder: "docs" });
+
+			await engine.updateCacheFromCommit("commit-oid");
+
+			// Should update cache using vault path "a.md", not "docs/a.md"
+			expect(state.setSHA).toHaveBeenCalledWith(
+				"a.md",
+				expect.objectContaining({ remoteSha: "new-sha-a" }),
+			);
+			// Should not update cache for outside.md (outside syncFolder)
+			expect(state.setSHA).not.toHaveBeenCalledWith("outside.md", expect.anything());
 		});
 	});
 });

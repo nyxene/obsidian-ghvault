@@ -69,8 +69,14 @@ vi.mock("./sync/push", () => ({
 	PushEngine: class MockPushEngine {},
 }));
 
+const mockStateClear = vi.fn();
+const mockStateSave = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("./sync/state", () => ({
-	SyncStateManager: class MockSyncStateManager {},
+	SyncStateManager: class MockSyncStateManager {
+		clear = mockStateClear;
+		save = mockStateSave;
+	},
 }));
 
 vi.mock("./sync/vault-adapter", () => ({
@@ -236,6 +242,8 @@ describe("GHVaultPlugin", () => {
 		});
 		mockIsSyncing = false;
 		mockGetRepoInfo.mockReset();
+		mockStateClear.mockClear();
+		mockStateSave.mockClear();
 	});
 
 	describe("loadSettings", () => {
@@ -471,6 +479,19 @@ describe("GHVaultPlugin", () => {
 			await plugin.runSync();
 
 			expect(lastNotice().message).toBe("GHVault: Sync failed — API rate limit exceeded");
+		});
+	});
+
+	describe("syncFolder change", () => {
+		it("clearSyncState resets state and persists", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			mockStateClear.mockClear();
+			mockStateSave.mockClear();
+
+			await plugin.clearSyncState();
+
+			expect(mockStateClear).toHaveBeenCalled();
+			expect(mockStateSave).toHaveBeenCalled();
 		});
 	});
 

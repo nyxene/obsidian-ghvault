@@ -1,16 +1,16 @@
 import { EXCLUDED_PATTERNS } from "../types";
 
-export function toRepoPath(vaultPath: string, repoPrefix: string): string {
+export function toRepoPath(vaultPath: string, syncFolder: string): string {
 	const normalized = normalizePath(vaultPath);
-	if (!repoPrefix) return normalized;
-	return `${normalizePath(repoPrefix)}/${normalized}`;
+	if (!syncFolder) return normalized;
+	return `${normalizePath(syncFolder)}/${normalized}`;
 }
 
-export function toVaultPath(repoPath: string, repoPrefix: string): string | null {
+export function toVaultPath(repoPath: string, syncFolder: string): string | null {
 	const normalized = normalizePath(repoPath);
-	if (!repoPrefix) return normalized;
+	if (!syncFolder) return normalized;
 
-	const prefix = `${normalizePath(repoPrefix)}/`;
+	const prefix = `${normalizePath(syncFolder)}/`;
 	if (!normalized.startsWith(prefix)) return null;
 	return normalized.slice(prefix.length);
 }

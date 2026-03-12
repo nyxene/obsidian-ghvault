@@ -1,6 +1,7 @@
 import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
 import type { GHVaultSettings, LogLevel } from "./types";
 import { VALID_LOG_LEVELS } from "./types";
+import { normalizePath } from "./utils/path";
 
 export function sanitizeSlug(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._-]/g, "");
@@ -8,6 +9,42 @@ export function sanitizeSlug(value: string): string {
 
 export function sanitizeBranch(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._/-]/g, "");
+}
+
+export function sanitizeSyncFolder(value: string): string {
+	const normalized = normalizePath(value);
+	// Reject any segment that is ".."
+	const segments = normalized.split("/").filter((s) => s !== "" && s !== "..");
+	return segments.join("/");
+}
+
+export interface SyncFolderValidation {
+	sanitized: string;
+	hasTraversal: boolean;
+}
+
+export function validateSyncFolder(value: string): SyncFolderValidation {
+	const normalized = normalizePath(value);
+	const segments = normalized.split("/").filter((s) => s !== "");
+	const hasTraversal = segments.some((s) => s === "..");
+	const clean = segments.filter((s) => s !== "..").join("/");
+	return { sanitized: clean, hasTraversal };
+}
+
+const SYNC_FOLDER_HINT = "Relative path using forward slashes, e.g. docs/vault";
+
+function syncFolderDesc(rawValue: string): string {
+	if (!rawValue.trim()) {
+		return "Folder inside the repo to sync. Leave empty to sync entire repo.";
+	}
+	const validation = validateSyncFolder(rawValue);
+	if (validation.hasTraversal) {
+		return `⚠ Path must not contain "..". Resolved: ${validation.sanitized || "(empty)"}. ${SYNC_FOLDER_HINT}`;
+	}
+	if (validation.sanitized !== rawValue) {
+		return `Will sync: ${validation.sanitized}/. ${SYNC_FOLDER_HINT}`;
+	}
+	return `Will sync: ${validation.sanitized}/`;
 }
 
 export interface SettingTabCallbacks {
@@ -98,6 +135,21 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.settings.branch = sanitizeBranch(value);
 						text.setValue(this.settings.branch);
+						await this.callbacks.onSave(this.settings);
+					}),
+			);
+
+		const syncFolderSetting = new Setting(containerEl)
+			.setName("Sync folder")
+			.setDesc(syncFolderDesc(this.settings.syncFolder))
+			.addText((text) =>
+				text
+					.setPlaceholder("docs/vault")
+					.setValue(this.settings.syncFolder)
+					.onChange(async (value) => {
+						const validation = validateSyncFolder(value);
+						this.settings.syncFolder = validation.sanitized;
+						syncFolderSetting.setDesc(syncFolderDesc(value));
 						await this.callbacks.onSave(this.settings);
 					}),
 			);

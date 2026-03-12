@@ -4,7 +4,7 @@ import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { pMap } from "../utils/concurrency";
 import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
-import { isSafePath } from "../utils/path";
+import { isSafePath, toRepoPath, toVaultPath } from "../utils/path";
 import { computeRemoteChanges } from "./comparator";
 import type { SyncStateManager } from "./state";
 
@@ -25,6 +25,7 @@ export interface PullEngineOptions {
 	state: SyncStateManager;
 	vault: VaultAdapter;
 	logger: Logger;
+	syncFolder: string;
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -35,12 +36,14 @@ export class PullEngine {
 	private readonly state: SyncStateManager;
 	private readonly vault: VaultAdapter;
 	private readonly logger: Logger;
+	private readonly syncFolder: string;
 
 	constructor(options: PullEngineOptions) {
 		this.client = options.client;
 		this.state = options.state;
 		this.vault = options.vault;
 		this.logger = options.logger;
+		this.syncFolder = options.syncFolder;
 	}
 
 	async getRemoteChanges(branch: string): Promise<FileChange[]> {
@@ -63,8 +66,11 @@ export class PullEngine {
 			if (!(error instanceof GitHubNotFoundError)) throw error;
 		}
 
+		// Map repo paths to vault paths, filtering out files outside syncFolder
+		const mappedEntries = this.mapTreeToVaultPaths(treeEntries);
+
 		const cache = this.state.getAllSHAs();
-		return computeRemoteChanges(treeEntries, cache);
+		return computeRemoteChanges(mappedEntries, cache);
 	}
 
 	async pull(branch: string, skipPaths?: ReadonlySet<string>): Promise<PullResult> {
@@ -78,8 +84,9 @@ export class PullEngine {
 		} catch (error: unknown) {
 			if (error instanceof GitHubEmptyRepoError) {
 				this.logger.info("Repository is empty — initializing");
+				const initPath = toRepoPath(".ghvault", this.syncFolder);
 				const init = await this.client.createFile(
-					".ghvault",
+					initPath,
 					"initialized",
 					"chore: initialize repository",
 					branch,
@@ -108,15 +115,20 @@ export class PullEngine {
 			}
 		}
 
+		// Map repo paths to vault paths, filtering out files outside syncFolder.
+		// Build a vault->repo path map for API calls and a vault->size map.
+		const mappedEntries = this.mapTreeToVaultPaths(treeEntries);
+		const repoPathMap = this.buildRepoPathMap(treeEntries);
+
 		const treeSizeMap = new Map<string, number>();
-		for (const entry of treeEntries) {
+		for (const entry of mappedEntries) {
 			if (entry.size !== undefined) {
 				treeSizeMap.set(entry.path, entry.size);
 			}
 		}
 
 		const cache = this.state.getAllSHAs();
-		const allChanges = computeRemoteChanges(treeEntries, cache);
+		const allChanges = computeRemoteChanges(mappedEntries, cache);
 
 		const changes = skipPaths?.size ? allChanges.filter((c) => !skipPaths.has(c.path)) : allChanges;
 
@@ -166,7 +178,9 @@ export class PullEngine {
 			downloads,
 			async (change) => {
 				try {
-					const file = await this.client.getFileContent(change.path, branch);
+					// Use repo path for API call (vault path + syncFolder prefix)
+					const repoPath = repoPathMap.get(change.path) ?? change.path;
+					const file = await this.client.getFileContent(repoPath, branch);
 					const rawBytes = decodeBase64ToBytes(file.content);
 
 					const blobSha = await computeGitBlobSha(rawBytes);
@@ -248,12 +262,53 @@ export class PullEngine {
 
 		for (const entry of entries) {
 			if (entry.type !== "blob") continue;
-			const cached = this.state.getSHA(entry.path);
+			// Map repo path to vault path; skip files outside syncFolder
+			const vaultPath = toVaultPath(entry.path, this.syncFolder);
+			if (vaultPath === null) continue;
+			const cached = this.state.getSHA(vaultPath);
 			if (cached) {
-				this.state.setSHA(entry.path, { ...cached, remoteSha: entry.sha });
+				this.state.setSHA(vaultPath, { ...cached, remoteSha: entry.sha });
 			}
 		}
 		await this.state.save();
+	}
+
+	/**
+	 * Map tree entries from repo paths to vault paths, filtering out
+	 * entries outside the syncFolder. Returns new entries with vault paths.
+	 */
+	private mapTreeToVaultPaths(
+		entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"],
+	): Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] {
+		if (!this.syncFolder) return entries;
+
+		const mapped: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+		for (const entry of entries) {
+			const vaultPath = toVaultPath(entry.path, this.syncFolder);
+			if (vaultPath !== null) {
+				mapped.push({ ...entry, path: vaultPath });
+			}
+		}
+		return mapped;
+	}
+
+	/**
+	 * Build a map from vault path -> repo path for API calls.
+	 * Only needed when syncFolder is set.
+	 */
+	private buildRepoPathMap(
+		entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"],
+	): Map<string, string> {
+		const map = new Map<string, string>();
+		if (!this.syncFolder) return map;
+
+		for (const entry of entries) {
+			const vaultPath = toVaultPath(entry.path, this.syncFolder);
+			if (vaultPath !== null) {
+				map.set(vaultPath, entry.path);
+			}
+		}
+		return map;
 	}
 }
 

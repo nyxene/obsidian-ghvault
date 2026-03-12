@@ -2,7 +2,7 @@ import type { GitHubGraphQL } from "../github/graphql";
 import type { FileChange } from "../types";
 import { computeHash } from "../utils/hash";
 import type { Logger } from "../utils/logger";
-import { isSafePath } from "../utils/path";
+import { isSafePath, toRepoPath } from "../utils/path";
 import type { SyncStateManager } from "./state";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -23,6 +23,7 @@ export interface PushEngineOptions {
 	state: SyncStateManager;
 	vault: VaultReader;
 	logger: Logger;
+	syncFolder: string;
 }
 
 export interface PushCommitOptions {
@@ -37,12 +38,14 @@ export class PushEngine {
 	private readonly state: SyncStateManager;
 	private readonly vault: VaultReader;
 	private readonly logger: Logger;
+	private readonly syncFolder: string;
 
 	constructor(options: PushEngineOptions) {
 		this.graphql = options.graphql;
 		this.state = options.state;
 		this.vault = options.vault;
 		this.logger = options.logger;
+		this.syncFolder = options.syncFolder;
 	}
 
 	async push(changes: FileChange[], commitOptions: PushCommitOptions): Promise<PushResult> {
@@ -85,11 +88,13 @@ export class PushEngine {
 				}
 				const base64Content = encodeToBase64(content);
 				const hash = await computeHash(content);
-				additions.push({ path: change.path, base64Content });
+				const repoPath = toRepoPath(change.path, this.syncFolder);
+				additions.push({ path: repoPath, base64Content });
 				contentHashes.set(change.path, { hash, size: contentSize });
 				result.pushed.push(change.path);
 			} else if (change.type === "delete") {
-				deletions.push({ path: change.path });
+				const repoPath = toRepoPath(change.path, this.syncFolder);
+				deletions.push({ path: repoPath });
 				result.deleted.push(change.path);
 			}
 		}
