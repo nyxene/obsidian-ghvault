@@ -1,11 +1,9 @@
 import type { App } from "obsidian";
 import type { LogLevel } from "../types";
-import { LOG_FILE, VALID_LOG_LEVELS } from "../types";
+import { LOG_FILE, SECRET_PATTERN, VALID_LOG_LEVELS } from "../types";
 
 const MAX_LOG_LINES = 5000;
 const TRIM_TO_LINES = 3000;
-const SECRET_PATTERN =
-	/gh[pousx]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 function sanitizeSecrets(text: string): string {
 	return text.replace(SECRET_PATTERN, "[REDACTED]");
@@ -97,7 +95,10 @@ export class Logger {
 			return;
 		}
 
-		this.app.vault.adapter.append(LOG_FILE, `${line}\n`).catch(() => {});
+		this.app.vault.adapter.append(LOG_FILE, `${line}\n`).catch(() => {
+			// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
+			console.warn("[GHVault] Log write failed:", line);
+		});
 
 		this.writeCount++;
 		if (this.writeCount >= MAX_LOG_LINES) {
@@ -116,14 +117,20 @@ export class Logger {
 					return this.app.vault.adapter.write(LOG_FILE, `${trimmed}\n`);
 				}
 			})
-			.catch(() => {})
+			.catch(() => {
+				// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
+				console.warn("[GHVault] Log rotation failed");
+			})
 			.finally(() => {
 				this.rotating = false;
 				this.writeCount = 0;
 				if (this.writeQueue.length > 0) {
 					const queued = this.writeQueue.join("\n");
 					this.writeQueue = [];
-					this.app.vault.adapter.append(LOG_FILE, `${queued}\n`).catch(() => {});
+					this.app.vault.adapter.append(LOG_FILE, `${queued}\n`).catch(() => {
+						// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
+						console.warn("[GHVault] Log queue flush failed");
+					});
 					this.writeCount = queued.split("\n").length;
 				}
 			});

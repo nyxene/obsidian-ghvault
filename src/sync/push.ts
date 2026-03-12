@@ -69,6 +69,13 @@ export class PushEngine {
 			}
 
 			if (change.type === "create" || change.type === "modify") {
+				if (change.sizeHint !== undefined && change.sizeHint > MAX_FILE_SIZE) {
+					this.logger.warn("Skipping oversized file (pre-check)", {
+						path: change.path,
+						size: change.sizeHint,
+					});
+					continue;
+				}
 				const content = await this.vault.readFile(change.path);
 				const contentSize = new TextEncoder().encode(content).length;
 				if (contentSize > MAX_FILE_SIZE) {

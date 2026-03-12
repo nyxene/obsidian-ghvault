@@ -94,9 +94,13 @@ vi.mock("./utils/logger", () => ({
 	},
 }));
 
-vi.mock("./settings", () => ({
-	GHVaultSettingTab: class MockSettingTab {},
-}));
+vi.mock("./settings", async (importOriginal) => {
+	const actual = (await importOriginal()) as Record<string, unknown>;
+	return {
+		...actual,
+		GHVaultSettingTab: class MockSettingTab {},
+	};
+});
 
 // biome-ignore lint/suspicious/noExplicitAny: test helper for accessing private members
 type AnyPlugin = any;

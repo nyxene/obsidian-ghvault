@@ -197,6 +197,15 @@ export class PullEngine {
 						return;
 					}
 
+					if (isBinaryContent(rawBytes)) {
+						this.logger.warn("Skipping binary file", { path: change.path });
+						result.errors.push({
+							path: change.path,
+							error: "Binary file — not supported in current version",
+						});
+						return;
+					}
+
 					const content = new TextDecoder().decode(rawBytes);
 					await this.vault.writeFile(change.path, content);
 
@@ -312,7 +321,22 @@ export class PullEngine {
 	}
 }
 
+const BINARY_CHECK_BYTES = 8192;
+
+function isBinaryContent(bytes: Uint8Array): boolean {
+	const limit = Math.min(bytes.length, BINARY_CHECK_BYTES);
+	for (let i = 0; i < limit; i++) {
+		if (bytes[i] === 0) return true;
+	}
+	return false;
+}
+
+const BASE64_RE = /^[A-Za-z0-9+/\n]+=*\n?$/;
+
 function decodeBase64ToBytes(encoded: string): Uint8Array {
+	if (!BASE64_RE.test(encoded)) {
+		throw new Error("Invalid base64 content received from GitHub API");
+	}
 	const cleaned = encoded.replace(/\n/g, "");
 	return Uint8Array.from(atob(cleaned), (c) => c.charCodeAt(0));
 }

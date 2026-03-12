@@ -122,7 +122,7 @@ describe("SyncEngine", () => {
 		const result = await engine.sync();
 
 		expect(pushEngine.push).toHaveBeenCalledWith(
-			[{ path: "local.md", type: "create" }],
+			[expect.objectContaining({ path: "local.md", type: "create" })],
 			expect.objectContaining({ branch: "main", message: expect.any(String) }),
 		);
 		expect(result.push?.pushed).toEqual(["local.md"]);
@@ -145,7 +145,7 @@ describe("SyncEngine", () => {
 		await engine.sync();
 
 		expect(pushEngine.push).toHaveBeenCalledWith(
-			[{ path: "doc.md", type: "modify" }],
+			[expect.objectContaining({ path: "doc.md", type: "modify" })],
 			expect.any(Object),
 		);
 	});
@@ -299,7 +299,7 @@ describe("SyncEngine", () => {
 
 			// Push should only include non-conflicting local changes
 			expect(pushEngine.push).toHaveBeenCalledWith(
-				[{ path: "local-only.md", type: "create" }],
+				[expect.objectContaining({ path: "local-only.md", type: "create" })],
 				expect.any(Object),
 			);
 		});

@@ -2,14 +2,14 @@ import { Notice, Plugin } from "obsidian";
 import { GitHubClient } from "./github/client";
 import { GitHubGraphQL } from "./github/graphql";
 import { RateLimiter } from "./github/rate-limit";
-import { GHVaultSettingTab } from "./settings";
+import { GHVaultSettingTab, sanitizeBranch, sanitizeSlug, sanitizeSyncFolder } from "./settings";
 import { SyncEngine } from "./sync/engine";
 import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
 import type { GHVaultSettings, LogLevel } from "./types";
-import { DEFAULT_SETTINGS, VALID_LOG_LEVELS } from "./types";
+import { DEFAULT_SETTINGS, SECRET_PATTERN, VALID_LOG_LEVELS } from "./types";
 import { Logger } from "./utils/logger";
 
 export default class GHVaultPlugin extends Plugin {
@@ -198,10 +198,21 @@ export default class GHVaultPlugin extends Plugin {
 		const data = await this.loadData();
 		if (data?.settings) {
 			const raw = data.settings as Record<string, unknown>;
-			this.settings = { ...DEFAULT_SETTINGS, ...raw };
-			if (!VALID_LOG_LEVELS.includes(this.settings.logLevel as LogLevel)) {
-				this.settings.logLevel = DEFAULT_SETTINGS.logLevel;
-			}
+			const token = typeof raw.githubToken === "string" ? raw.githubToken : "";
+			const owner = typeof raw.owner === "string" ? raw.owner : "";
+			const repo = typeof raw.repo === "string" ? raw.repo : "";
+			const branch = typeof raw.branch === "string" ? raw.branch : DEFAULT_SETTINGS.branch;
+			const folder = typeof raw.syncFolder === "string" ? raw.syncFolder : "";
+			this.settings = {
+				githubToken: token,
+				owner: sanitizeSlug(owner),
+				repo: sanitizeSlug(repo),
+				branch: sanitizeBranch(branch),
+				syncFolder: sanitizeSyncFolder(folder),
+				logLevel: VALID_LOG_LEVELS.includes(raw.logLevel as LogLevel)
+					? (raw.logLevel as LogLevel)
+					: DEFAULT_SETTINGS.logLevel,
+			};
 		}
 	}
 
@@ -223,8 +234,5 @@ export default class GHVaultPlugin extends Plugin {
 }
 
 export function sanitizeErrorForUI(message: string): string {
-	return message.replace(
-		/gh[pousx]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+/g,
-		"[REDACTED]",
-	);
+	return message.replace(SECRET_PATTERN, "[REDACTED]");
 }

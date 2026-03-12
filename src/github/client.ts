@@ -114,7 +114,9 @@ export class GitHubClient {
 	async listBranches(): Promise<string[]> {
 		const owner = encodeURIComponent(this.owner);
 		const repo = encodeURIComponent(this.repo);
-		const data = await this.request<Array<{ name: string }>>(`/repos/${owner}/${repo}/branches`);
+		const data = await this.request<Array<{ name: string }>>(
+			`/repos/${owner}/${repo}/branches?per_page=100`,
+		);
 		return data.map((b) => b.name);
 	}
 

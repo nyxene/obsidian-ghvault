@@ -180,7 +180,9 @@ export class GitHubGraphQL {
 			type: first.type,
 			message: first.message,
 		});
-		return new Error(`GraphQL error: ${first.message}`);
+		const truncated =
+			first.message.length > 200 ? `${first.message.slice(0, 200)}…` : first.message;
+		return new Error(`GraphQL error: ${truncated}`);
 	}
 }
 
