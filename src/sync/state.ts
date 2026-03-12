@@ -72,8 +72,8 @@ export class SyncStateManager {
 		}
 	}
 
-	getAllSHAs(): Record<string, SHACacheEntry> {
-		return { ...this.state.cache };
+	getAllSHAs(): Readonly<Record<string, SHACacheEntry>> {
+		return this.state.cache;
 	}
 
 	getHeadOid(): string {

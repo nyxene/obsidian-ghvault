@@ -15,7 +15,7 @@ export interface LocalFileInfo {
  */
 export function computeLocalChanges(
 	localFiles: LocalFileInfo[],
-	cache: Record<string, SHACacheEntry>,
+	cache: Readonly<Record<string, SHACacheEntry>>,
 ): FileChange[] {
 	const changes: FileChange[] = [];
 	const localPaths = new Set<string>();
@@ -50,7 +50,7 @@ export function computeLocalChanges(
  */
 export function computeRemoteChanges(
 	remoteTree: GitHubTreeEntry[],
-	cache: Record<string, SHACacheEntry>,
+	cache: Readonly<Record<string, SHACacheEntry>>,
 ): FileChange[] {
 	const changes: FileChange[] = [];
 	const remotePaths = new Set<string>();

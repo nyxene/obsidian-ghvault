@@ -94,11 +94,29 @@ vi.mock("./utils/logger", () => ({
 	},
 }));
 
+interface SettingTabCallbacks {
+	onSave?: (settings: Record<string, unknown>) => Promise<void>;
+	onTestConnection?: () => Promise<void>;
+}
+
+let capturedSettingCallbacks: SettingTabCallbacks = {};
+
 vi.mock("./settings", async (importOriginal) => {
 	const actual = (await importOriginal()) as Record<string, unknown>;
 	return {
 		...actual,
-		GHVaultSettingTab: class MockSettingTab {},
+		GHVaultSettingTab: class MockSettingTab {
+			constructor(
+				_app: unknown,
+				_plugin: unknown,
+				_settings: unknown,
+				callbacks?: SettingTabCallbacks,
+			) {
+				if (callbacks) {
+					capturedSettingCallbacks = callbacks;
+				}
+			}
+		},
 	};
 });
 
@@ -128,6 +146,7 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	ribbonCallback: () => void;
 	commandCallback: () => void;
 	onTestConnection: () => Promise<void>;
+	onSave: (settings: Record<string, unknown>) => Promise<void>;
 }> {
 	const mod = await import("./main");
 	const PluginClass = mod.default as AnyPlugin;
@@ -159,8 +178,11 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	await plugin.onload();
 
 	const onTestConnection = (): Promise<void> => plugin.testConnection();
+	const onSave = capturedSettingCallbacks.onSave as (
+		settings: Record<string, unknown>,
+	) => Promise<void>;
 
-	return { plugin, statusBarEl, ribbonCallback, commandCallback, onTestConnection };
+	return { plugin, statusBarEl, ribbonCallback, commandCallback, onTestConnection, onSave };
 }
 
 describe("sanitizeErrorForUI (exported)", () => {
@@ -248,6 +270,7 @@ describe("GHVaultPlugin", () => {
 		mockGetRepoInfo.mockReset();
 		mockStateClear.mockClear();
 		mockStateSave.mockClear();
+		capturedSettingCallbacks = {};
 	});
 
 	describe("loadSettings", () => {
@@ -496,6 +519,68 @@ describe("GHVaultPlugin", () => {
 
 			expect(mockStateClear).toHaveBeenCalled();
 			expect(mockStateSave).toHaveBeenCalled();
+		});
+
+		it("onSave with changed syncFolder triggers clearSyncState", async () => {
+			const { onSave } = await loadPlugin(CONFIGURED_SETTINGS);
+			mockStateClear.mockClear();
+			mockStateSave.mockClear();
+
+			await onSave({
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				syncFolder: "docs/notes",
+				logLevel: "info",
+			});
+
+			expect(mockStateClear).toHaveBeenCalled();
+			expect(mockStateSave).toHaveBeenCalled();
+		});
+
+		it("onSave with same syncFolder does NOT trigger clearSyncState", async () => {
+			const { onSave } = await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					syncFolder: "docs",
+				},
+			});
+			mockStateClear.mockClear();
+			mockStateSave.mockClear();
+
+			await onSave({
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				syncFolder: "docs",
+				logLevel: "info",
+			});
+
+			expect(mockStateClear).not.toHaveBeenCalled();
+		});
+
+		it("onSave rebuilds SyncEngine with new settings", async () => {
+			const { plugin, onSave } = await loadPlugin(CONFIGURED_SETTINGS);
+			const engineBefore = plugin.syncEngine;
+			expect(engineBefore).not.toBeNull();
+
+			await onSave({
+				githubToken: "ghp_newtoken12345678901234",
+				owner: "newowner",
+				repo: "newrepo",
+				branch: "main",
+				syncFolder: "",
+				logLevel: "info",
+			});
+
+			// Engine should have been rebuilt (new instance)
+			expect(plugin.syncEngine).not.toBeNull();
+			expect(plugin.syncEngine).not.toBe(engineBefore);
 		});
 	});
 
