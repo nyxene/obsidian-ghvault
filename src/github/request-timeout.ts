@@ -13,12 +13,13 @@ export function requestWithTimeout(
 	params: RequestUrlParam,
 	timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<RequestUrlResponse> {
+	let timerId: ReturnType<typeof setTimeout>;
+
 	const timeout = new Promise<never>((_resolve, reject) => {
-		const id = setTimeout(() => {
-			clearTimeout(id);
-			reject(new GitHubTimeoutError(timeoutMs));
-		}, timeoutMs);
+		timerId = setTimeout(() => reject(new GitHubTimeoutError(timeoutMs)), timeoutMs);
 	});
 
-	return Promise.race([requestUrl(params), timeout]);
+	return Promise.race([requestUrl(params), timeout]).finally(() => {
+		clearTimeout(timerId);
+	});
 }

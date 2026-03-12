@@ -26,9 +26,9 @@ export function computeLocalChanges(
 
 		const cached = cache[file.path];
 		if (!cached) {
-			changes.push({ path: file.path, type: "create" });
+			changes.push({ path: file.path, type: "create", sizeHint: file.size });
 		} else if (cached.localContentHash !== file.contentHash) {
-			changes.push({ path: file.path, type: "modify" });
+			changes.push({ path: file.path, type: "modify", sizeHint: file.size });
 		}
 	}
 

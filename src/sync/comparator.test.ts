@@ -31,7 +31,7 @@ describe("computeLocalChanges", () => {
 
 		const changes = computeLocalChanges(localFiles, {});
 
-		expect(changes).toEqual([{ path: "new.md", type: "create" }]);
+		expect(changes).toEqual([expect.objectContaining({ path: "new.md", type: "create" })]);
 	});
 
 	it("detects modified local file", () => {
@@ -40,7 +40,7 @@ describe("computeLocalChanges", () => {
 
 		const changes = computeLocalChanges(localFiles, cache);
 
-		expect(changes).toEqual([{ path: "a.md", type: "modify" }]);
+		expect(changes).toEqual([expect.objectContaining({ path: "a.md", type: "modify" })]);
 	});
 
 	it("detects deleted local file", () => {
@@ -60,7 +60,7 @@ describe("computeLocalChanges", () => {
 
 		const changes = computeLocalChanges(localFiles, {});
 
-		expect(changes).toEqual([{ path: "real.md", type: "create" }]);
+		expect(changes).toEqual([expect.objectContaining({ path: "real.md", type: "create" })]);
 	});
 
 	it("skips excluded files in cache when detecting deletes", () => {
@@ -88,9 +88,11 @@ describe("computeLocalChanges", () => {
 		const changes = computeLocalChanges(localFiles, cache);
 
 		expect(changes).toHaveLength(3);
-		expect(changes).toContainEqual({ path: "existing.md", type: "modify" });
-		expect(changes).toContainEqual({ path: "new.md", type: "create" });
-		expect(changes).toContainEqual({ path: "deleted.md", type: "delete" });
+		expect(changes).toContainEqual(
+			expect.objectContaining({ path: "existing.md", type: "modify" }),
+		);
+		expect(changes).toContainEqual(expect.objectContaining({ path: "new.md", type: "create" }));
+		expect(changes).toContainEqual(expect.objectContaining({ path: "deleted.md", type: "delete" }));
 	});
 });
 
