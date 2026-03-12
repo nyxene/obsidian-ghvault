@@ -574,26 +574,24 @@ describe("Sync integration", () => {
 				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
 			});
 
+			// computeHash mock returns deterministic hash based on content length
+			// Pull now computes localContentHash, so after first sync the cache will have it.
+
 			// First sync: pulls the remote file
 			const first = await engine.sync();
 			expect(first.pull.created).toContain("stable.md");
 
-			// After first sync, vault has the file and cache is populated.
-			// For second sync, listFiles will return the file with a hash matching cache.
+			// After first sync, vault has the file and cache is populated with localContentHash.
+			// For second sync, listFiles must return the same hash that pull stored.
+			const cached = state.getSHA("stable.md");
+			const pulledHash = cached?.localContentHash ?? "";
+
 			vi.mocked(vault.listFiles).mockImplementation(async () => {
-				const hash = "hash-stable.md-14";
-				vi.mocked(computeHash).mockResolvedValueOnce(hash);
-				return [{ path: "stable.md", contentHash: hash, size: 14 }];
+				vi.mocked(computeHash).mockResolvedValueOnce(pulledHash);
+				return [{ path: "stable.md", contentHash: pulledHash, size: 14 }];
 			});
 
 			// Second sync: should detect no pull or push changes
-			// Update the state cache to have a matching localContentHash and persist it
-			const cached = state.getSHA("stable.md");
-			if (cached) {
-				state.setSHA("stable.md", { ...cached, localContentHash: "hash-stable.md-14" });
-			}
-			await state.save();
-
 			const second = await engine.sync();
 			expect(second.pull.created).toHaveLength(0);
 			expect(second.pull.modified).toHaveLength(0);
@@ -688,6 +686,33 @@ describe("Sync integration", () => {
 			expect(result.pull.created).toContain("other/file.md");
 			expect(vault.files.get("notes/hello.md")).toBe("Hello");
 			expect(vault.files.get("other/file.md")).toBe("Other");
+		});
+	});
+
+	describe("network failure during pull — partial results", () => {
+		it("succeeds for some files and reports errors for failed ones", async () => {
+			const { engine, vault, client } = createIntegrationSetup({
+				remoteFiles: [
+					{ path: "ok.md", sha: "sha-ok", content: "ok content", size: 10 },
+					{ path: "fail.md", sha: "sha-fail", content: "fail content", size: 12 },
+				],
+			});
+
+			// Override getFileContent: ok.md succeeds, fail.md throws
+			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
+				if (path === "fail.md") return Promise.reject(new Error("connection reset"));
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-ok");
+				return Promise.resolve({ content: btoa("ok content"), sha: "sha-ok", size: 10 });
+			});
+
+			const result = await engine.sync();
+
+			expect(result.pull.created).toContain("ok.md");
+			expect(result.pull.created).not.toContain("fail.md");
+			expect(result.pull.errors).toEqual(
+				expect.arrayContaining([{ path: "fail.md", error: "connection reset" }]),
+			);
+			expect(vault.files.get("ok.md")).toBe("ok content");
 		});
 	});
 });

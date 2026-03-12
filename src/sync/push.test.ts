@@ -6,6 +6,13 @@ import type { VaultReader } from "./push";
 import { PushEngine } from "./push";
 import type { SyncStateManager } from "./state";
 
+vi.mock("../utils/hash", () => ({
+	computeHash: vi
+		.fn()
+		.mockImplementation((content: string) => Promise.resolve(`hash-${content.length}`)),
+	computeGitBlobSha: vi.fn().mockImplementation(() => Promise.resolve("computed-blob-sha")),
+}));
+
 function createMockGraphQL(): GitHubGraphQL {
 	return {
 		createCommit: vi.fn().mockResolvedValue({ oid: "new-oid", url: "https://commit" }),
@@ -316,6 +323,47 @@ describe("PushEngine", () => {
 				maxSize: expect.any(Number),
 			}),
 		);
+	});
+
+	it("stores correct remoteSha (git blob SHA) in cache after push", async () => {
+		const state = createMockState();
+		const vault = createMockVault();
+		const engine = createPushEngine({ state, vault });
+
+		const changes: FileChange[] = [{ path: "file.md", type: "create" }];
+		await engine.push(changes, commitOptions);
+
+		expect(state.setSHA).toHaveBeenCalledWith(
+			"file.md",
+			expect.objectContaining({
+				remoteSha: "computed-blob-sha",
+				localContentHash: expect.any(String),
+			}),
+		);
+		// remoteSha should NOT be empty
+		const call = vi.mocked(state.setSHA).mock.calls[0];
+		expect(call[1].remoteSha).not.toBe("");
+	});
+
+	it("skips oversized file via sizeHint pre-check without reading content", async () => {
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = createPushEngine({ state, vault, logger });
+
+		const oversized = 51 * 1024 * 1024;
+		const changes: FileChange[] = [
+			{ path: "huge.bin", type: "create", sizeHint: oversized },
+			{ path: "small.md", type: "create" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toEqual(["small.md"]);
+		expect(vault.readFile).not.toHaveBeenCalledWith("huge.bin");
+		expect(logger.warn).toHaveBeenCalledWith("Skipping oversized file (pre-check)", {
+			path: "huge.bin",
+			size: oversized,
+		});
 	});
 
 	it("does not skip files just under 1.5MB GraphQL limit", async () => {
