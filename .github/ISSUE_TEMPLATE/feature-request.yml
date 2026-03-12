@@ -1,6 +1,7 @@
 name: Feature Request
 description: Suggest a new feature or improvement
-labels: ["enhancement"]
+labels: ["feat"]
+assignees: ["nyxene"]
 body:
   - type: markdown
     attributes:
