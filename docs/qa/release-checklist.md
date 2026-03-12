@@ -4,11 +4,10 @@ Step-by-step checklist for releasing GHVault. Combines automated gates, manual Q
 
 ## How to use
 
-1. When release-please opens a release PR, create a QA tracking issue from `.github/ISSUE_TEMPLATE/release-qa.md`
-2. Determine release type: **patch** / **minor** / **major**
-3. Run the corresponding test scope (see below)
-4. Check off items as you go, note failures with issue links
-5. All required items must pass before merging the release PR
+1. When release-please opens a release PR, determine release type: **patch** / **minor** / **major**
+2. Run `/release-qa [patch|minor|major]` skill to execute automated gates and get the manual test checklist
+3. Walk through the manual tests, marking results
+4. All required items must pass before merging the release PR
 
 ## Release Types
 
