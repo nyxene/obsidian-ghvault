@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
-import { computeGitBlobSha } from "../utils/hash";
+import { computeGitBlobSha, computeHash } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import type { VaultAdapter } from "./pull";
 import { PullEngine } from "./pull";
@@ -9,6 +9,9 @@ import type { SyncStateManager } from "./state";
 
 vi.mock("../utils/hash", () => ({
 	computeGitBlobSha: vi.fn(),
+	computeHash: vi
+		.fn()
+		.mockImplementation((content: string) => Promise.resolve(`hash-${content.length}`)),
 }));
 
 function createMockClient(
@@ -300,6 +303,89 @@ describe("PullEngine", () => {
 		]);
 		expect(vault.writeFile).not.toHaveBeenCalled();
 		expect(state.setSHA).not.toHaveBeenCalled();
+	});
+
+	it("stores correct localContentHash in cache after download", async () => {
+		const client = createMockClient([{ path: "new.md", sha: "sha-new" }]);
+		const state = createMockState({});
+		const vault = createMockVault();
+		const { engine } = createEngine({ client, state, vault });
+
+		vi.mocked(computeHash).mockResolvedValueOnce("computed-content-hash");
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual(["new.md"]);
+		expect(computeHash).toHaveBeenCalledWith("content of new.md");
+		expect(state.setSHA).toHaveBeenCalledWith(
+			"new.md",
+			expect.objectContaining({
+				remoteSha: "sha-new",
+				localContentHash: "computed-content-hash",
+			}),
+		);
+	});
+
+	it("skips binary files containing null bytes", async () => {
+		const client = createMockClient([{ path: "image.png", sha: "sha-img" }]);
+		// Return base64 of binary content with null byte
+		const binaryBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]);
+		const binaryStr = String.fromCharCode(...binaryBytes);
+		vi.mocked(client.getFileContent).mockResolvedValue({
+			content: btoa(binaryStr),
+			sha: "sha-img",
+			size: 7,
+		});
+		vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-img");
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual([]);
+		expect(result.errors).toEqual([
+			{ path: "image.png", error: "Binary file — not supported in current version" },
+		]);
+		expect(vault.writeFile).not.toHaveBeenCalled();
+	});
+
+	it("throws on invalid base64 content from GitHub API", async () => {
+		const client = createMockClient([{ path: "bad.md", sha: "sha-bad" }]);
+		vi.mocked(client.getFileContent).mockResolvedValue({
+			content: "not-valid-base64!!!@@@",
+			sha: "sha-bad",
+			size: 10,
+		});
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+		const result = await engine.pull("main");
+
+		expect(result.errors).toEqual([
+			{ path: "bad.md", error: "Invalid base64 content received from GitHub API" },
+		]);
+		expect(vault.writeFile).not.toHaveBeenCalled();
+	});
+
+	it("handles pull with only deletes (no HTTP downloads)", async () => {
+		const client = createMockClient([]);
+		const state = createMockState({
+			"a.md": { remoteSha: "sha-a" },
+			"b.md": { remoteSha: "sha-b" },
+		});
+		const vault = createMockVault();
+		const { engine } = createEngine({ client, state, vault });
+
+		const result = await engine.pull("main");
+
+		expect(result.deleted).toEqual(["a.md", "b.md"]);
+		expect(result.created).toEqual([]);
+		expect(result.modified).toEqual([]);
+		expect(client.getFileContent).not.toHaveBeenCalled();
 	});
 
 	it("initializes empty repo with .ghvault file at repo root", async () => {

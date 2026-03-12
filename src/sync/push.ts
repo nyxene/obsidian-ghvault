@@ -1,6 +1,7 @@
 import type { GitHubGraphQL } from "../github/graphql";
 import type { FileChange } from "../types";
-import { computeHash } from "../utils/hash";
+import { toBase64 } from "../utils/base64";
+import { computeGitBlobSha, computeHash } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { isSafePath, toRepoPath } from "../utils/path";
 import type { SyncStateManager } from "./state";
@@ -60,7 +61,7 @@ export class PushEngine {
 
 		const additions = [];
 		const deletions = [];
-		const contentHashes = new Map<string, { hash: string; size: number }>();
+		const contentHashes = new Map<string, { hash: string; size: number; blobSha: string }>();
 
 		for (const change of changes) {
 			if (!isSafePath(change.path)) {
@@ -93,11 +94,13 @@ export class PushEngine {
 					});
 					continue;
 				}
-				const base64Content = encodeToBase64(content);
+				const base64Content = toBase64(content);
 				const hash = await computeHash(content);
+				const contentBytes = new TextEncoder().encode(content);
+				const blobSha = await computeGitBlobSha(contentBytes);
 				const repoPath = toRepoPath(change.path, this.syncFolder);
 				additions.push({ path: repoPath, base64Content });
-				contentHashes.set(change.path, { hash, size: contentSize });
+				contentHashes.set(change.path, { hash, size: contentSize, blobSha });
 				result.pushed.push(change.path);
 			} else if (change.type === "delete") {
 				const repoPath = toRepoPath(change.path, this.syncFolder);
@@ -127,7 +130,7 @@ export class PushEngine {
 		for (const path of result.pushed) {
 			const info = contentHashes.get(path);
 			this.state.setSHA(path, {
-				remoteSha: "",
+				remoteSha: info?.blobSha ?? "",
 				localContentHash: info?.hash ?? "",
 				lastSyncedAt: Date.now(),
 				size: info?.size ?? 0,
@@ -150,16 +153,4 @@ export class PushEngine {
 
 		return result;
 	}
-}
-
-function encodeToBase64(content: string): string {
-	const bytes = new TextEncoder().encode(content);
-	const chunkSize = 8192;
-	const chunks: string[] = [];
-	for (let i = 0; i < bytes.length; i += chunkSize) {
-		const end = Math.min(i + chunkSize, bytes.length);
-		const slice = bytes.subarray(i, end);
-		chunks.push(String.fromCharCode(...slice));
-	}
-	return btoa(chunks.join(""));
 }

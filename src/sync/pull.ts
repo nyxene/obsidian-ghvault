@@ -2,7 +2,7 @@ import type { GitHubClient } from "../github/client";
 import type { FileChange, GitHubRef, SHACacheEntry } from "../types";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { pMap } from "../utils/concurrency";
-import { computeGitBlobSha } from "../utils/hash";
+import { computeGitBlobSha, computeHash } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { isSafePath, toRepoPath, toVaultPath } from "../utils/path";
 import { computeRemoteChanges } from "./comparator";
@@ -207,11 +207,12 @@ export class PullEngine {
 					}
 
 					const content = new TextDecoder().decode(rawBytes);
+					const contentHash = await computeHash(content);
 					await this.vault.writeFile(change.path, content);
 
 					const entry: SHACacheEntry = {
 						remoteSha: file.sha,
-						localContentHash: "",
+						localContentHash: contentHash,
 						lastSyncedAt: Date.now(),
 						size: file.size,
 						isBinary: false,
