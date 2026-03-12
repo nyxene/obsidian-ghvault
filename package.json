@@ -13,6 +13,7 @@
 		"test:coverage": "vitest run --passWithNoTests --coverage",
 		"test:bench": "vitest bench",
 		"test:e2e": "wdio run wdio.conf.mts",
+		"check:obsidian": "bash scripts/check-obsidian.sh",
 		"prepare": "husky"
 	},
 	"keywords": [
