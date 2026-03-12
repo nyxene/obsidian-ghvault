@@ -31,6 +31,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Automatic GPG signing** — commits made via GraphQL are signed by GitHub automatically
 - **Rate limit aware** — tracks GitHub API rate limits and pauses before hitting them
 - **SHA integrity checks** — verifies downloaded file content matches GitHub's reported SHA
+- **Subfolder sync** — sync a specific folder in the repo instead of the entire repository
 - **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
 
@@ -69,19 +70,24 @@ Go to [GitHub Settings → Fine-grained tokens](https://github.com/settings/toke
 
 Open Obsidian Settings → GHVault and fill in:
 
+![GHVault Settings](docs/screenshots/settings.png)
+
 | Setting | Description |
 |---------|-------------|
 | **GitHub Token** | Your Personal Access Token |
 | **Owner** | GitHub username or organization |
 | **Repository** | Repository name |
 | **Branch** | Branch to sync with (default: `main`) |
+| **Sync Folder** | Subfolder in the repo to sync (leave empty for entire repo) |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
 
 Use the **Test Connection** button to verify your settings before syncing.
 
 ### 3. Sync
 
-Click the GHVault icon in the ribbon or run the **GHVault: Sync** command from the command palette.
+Click the GHVault icon in the ribbon or run the **GHVault: Sync now** command from the command palette. The status bar shows the current state:
+
+![GHVault: idle](docs/screenshots/vault-idle.png) ![GHVault: syncing...](docs/screenshots/vault-syncing.png)
 
 ## How it works
 
@@ -171,6 +177,7 @@ npm run type-check    # TypeScript type checking
 npm run test          # Run tests
 npm run test:coverage # Tests with coverage report
 npm run test:bench    # Run benchmarks
+npm run test:e2e      # E2E tests (requires Obsidian, runs via wdio-obsidian-service)
 ```
 
 ### Project structure
@@ -198,8 +205,6 @@ src/
     hash.ts                # SHA-256 / Git blob SHA
     logger.ts              # Structured JSON logger
     path.ts                # Path mapping and validation
-  ui/
-    status-bar.ts          # Status bar widget
 ```
 
 ## License
