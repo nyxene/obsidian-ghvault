@@ -323,18 +323,44 @@ describe("status bar", () => {
 		const text = await getStatusBarText();
 		expect(text).toBe("GHVault: syncing...");
 
-		// Wait for sync to complete (2000ms delay + processing)
-		await browser.pause(3000);
+		// Wait for sync to complete (slow mock + vault file push can take several seconds)
+		await browser.waitUntil(
+			async () => {
+				const t = await getStatusBarText();
+				return t !== "GHVault: syncing...";
+			},
+			{ timeout: 15000, interval: 500, timeoutMsg: "Sync did not complete within 15s" },
+		);
 
 		const afterText = await getStatusBarText();
 		expect(afterText).toBe("GHVault: idle");
 	});
 
 	it("shows 'GHVault: error' after failed sync", async () => {
+		// Ensure no sync is in progress from previous test
+		await browser.waitUntil(
+			async () => {
+				const syncing = await browser.executeObsidian(({ plugins }) => {
+					const plugin = plugins.ghvault as any;
+					return plugin.syncEngine?.isSyncing ?? false;
+				});
+				return !syncing;
+			},
+			{ timeout: 10000, interval: 500 },
+		);
+
 		await injectErrorMock("Test error for status bar");
 
 		triggerSync();
-		await browser.pause(500);
+
+		// Wait for status to change from syncing to error
+		await browser.waitUntil(
+			async () => {
+				const t = await getStatusBarText();
+				return t === "GHVault: error";
+			},
+			{ timeout: 5000, interval: 200, timeoutMsg: "Status did not change to error" },
+		);
 
 		const text = await getStatusBarText();
 		expect(text).toBe("GHVault: error");
