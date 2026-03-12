@@ -34,6 +34,8 @@ coverage/
 playwright-report/
 test-results/
 test-vault/
+.obsidian-cache/
+wdio-logs/
 
 # Logs
 *.log
