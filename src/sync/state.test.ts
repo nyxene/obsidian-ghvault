@@ -135,14 +135,17 @@ describe("SyncStateManager", () => {
 			expect(manager.getSHA("b.md")).toEqual(entry2);
 		});
 
-		it("getAllSHAs returns a copy", () => {
+		it("getAllSHAs returns a live readonly reference", () => {
 			const manager = new SyncStateManager(createMockStorage());
 			manager.setSHA("file.md", sampleEntry);
 
 			const all = manager.getAllSHAs();
-			delete all["file.md"];
+			expect(all["file.md"]).toEqual(sampleEntry);
 
-			expect(manager.getSHA("file.md")).toEqual(sampleEntry);
+			// Mutations via setSHA are reflected in the returned reference
+			const updated = { ...sampleEntry, remoteSha: "new-sha" };
+			manager.setSHA("file.md", updated);
+			expect(all["file.md"]).toEqual(updated);
 		});
 	});
 
