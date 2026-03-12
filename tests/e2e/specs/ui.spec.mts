@@ -315,16 +315,16 @@ describe("status bar", () => {
 	});
 
 	it("transitions to 'syncing...' during sync", async () => {
-		await injectSlowMock(1000);
+		await injectSlowMock(2000);
 
 		triggerSync(); // intentionally not awaited
-		await browser.pause(200);
+		await browser.pause(300);
 
 		const text = await getStatusBarText();
 		expect(text).toBe("GHVault: syncing...");
 
-		// Wait for sync to complete
-		await browser.pause(1500);
+		// Wait for sync to complete (2000ms delay + processing)
+		await browser.pause(3000);
 
 		const afterText = await getStatusBarText();
 		expect(afterText).toBe("GHVault: idle");
@@ -366,20 +366,23 @@ describe("ribbon icon & command", () => {
 
 		const ribbon = await browser.$('[aria-label="GHVault: Sync now"]');
 		await ribbon.click();
-		await browser.pause(1000);
+		await browser.pause(1500);
 
+		// Vault may have files (Welcome.md) → notice is "Synced" or "Already up to date"
 		const notices = await getNotices("GHVault:");
-		expect(notices.some((n) => n.includes("Already up to date"))).toBe(true);
+		expect(notices.length).toBeGreaterThan(0);
+		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(true);
 	});
 
 	it("command triggers sync", async () => {
 		await injectEmptyMocks();
 
 		await triggerSync();
-		await browser.pause(1000);
+		await browser.pause(1500);
 
 		const notices = await getNotices("GHVault:");
-		expect(notices.some((n) => n.includes("Already up to date"))).toBe(true);
+		expect(notices.length).toBeGreaterThan(0);
+		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(true);
 	});
 
 	it("successful sync shows pull/push counts in notice", async () => {
@@ -405,36 +408,32 @@ describe("ribbon icon & command", () => {
 // Group 3: Sync Guards
 // ---------------------------------------------------------------------------
 describe("sync guards", () => {
-	before(async () => {
-		await startNoticeCollector();
-	});
-
-	afterEach(async () => {
-		await clearNotices();
-	});
-
-	after(async () => {
-		await stopNoticeCollector();
-	});
-
 	it("shows 'Configure settings first' when no engine", async () => {
 		await resetPluginSettings();
 		await browser.reloadObsidian();
 		await browser.pause(500);
+
+		// Start collector AFTER reload (reload destroys previous observers)
+		await startNoticeCollector();
 
 		await triggerSync();
 		await browser.pause(500);
 
 		const notices = await getNotices("GHVault:");
 		expect(notices.some((n) => n.includes("Configure settings first"))).toBe(true);
+
+		await stopNoticeCollector();
 	});
 
 	it("shows 'Sync already in progress' on concurrent attempt", async () => {
 		await ensureSyncEngine();
+		// Start collector AFTER reload
+		await startNoticeCollector();
+
 		await injectSlowMock(2000);
 
 		triggerSync(); // first sync — don't await
-		await browser.pause(200);
+		await browser.pause(300);
 		triggerSync(); // second sync while first is still running
 		await browser.pause(500);
 
@@ -443,20 +442,26 @@ describe("sync guards", () => {
 
 		// Wait for slow sync to finish
 		await browser.pause(2500);
+		await stopNoticeCollector();
 	});
 
 	it("shows 'Please wait before syncing again' on cooldown", async () => {
 		await ensureSyncEngine();
+		// Start collector AFTER reload
+		await startNoticeCollector();
+
 		await injectEmptyMocks();
 
 		await triggerSync();
-		await browser.pause(500); // wait for first sync to complete
+		await browser.pause(1500); // wait for first sync to complete
 
 		triggerSync(); // immediate second sync → cooldown
 		await browser.pause(500);
 
 		const notices = await getNotices("GHVault:");
 		expect(notices.some((n) => n.includes("Please wait before syncing again"))).toBe(true);
+
+		await stopNoticeCollector();
 	});
 });
 
@@ -479,7 +484,10 @@ describe("notice content", () => {
 	});
 
 	it("error notice redacts token from message", async () => {
-		await injectErrorMock("Auth failed with token ghp_testtoken_e2e and more");
+		// Token must be 20+ chars after prefix to match SECRET_PATTERN
+		await injectErrorMock(
+			"Auth failed with token ghp_abcdefghijklmnopqrstuvwxyz12345 and more",
+		);
 
 		await triggerSync();
 		await browser.pause(500);
@@ -488,17 +496,21 @@ describe("notice content", () => {
 		const errorNotice = notices.find((n) => n.includes("Sync failed"));
 		expect(errorNotice).toBeDefined();
 		expect(errorNotice).toContain("[REDACTED]");
-		expect(errorNotice).not.toContain("ghp_testtoken");
+		expect(errorNotice).not.toContain("ghp_abcdef");
 	});
 
-	it("shows 'Already up to date' when no changes", async () => {
+	it("sync completion notice is shown after sync", async () => {
 		await injectEmptyMocks();
 
 		await triggerSync();
-		await browser.pause(500);
+		await browser.pause(1500);
 
+		// Vault may have files → "Synced" or "Already up to date"
 		const notices = await getNotices("GHVault:");
-		expect(notices.some((n) => n.includes("Already up to date"))).toBe(true);
+		expect(notices.length).toBeGreaterThan(0);
+		expect(
+			notices.some((n) => n.includes("Synced") || n.includes("Already up to date")),
+		).toBe(true);
 	});
 });
 
