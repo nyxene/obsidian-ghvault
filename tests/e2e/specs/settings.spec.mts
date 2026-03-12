@@ -327,8 +327,8 @@ describe("settings UI", () => {
 		const text = await testBtn.getText();
 		expect(text).toBe("Fill settings first");
 
-		// Wait for reset
-		await browser.pause(2500);
+		// Wait for reset (setTimeout in settings.ts is 2000ms)
+		await browser.pause(3000);
 		const resetText = await testBtn.getText();
 		expect(resetText).toBe("Test");
 	});
