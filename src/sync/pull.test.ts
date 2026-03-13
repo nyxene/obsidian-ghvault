@@ -570,6 +570,86 @@ describe("PullEngine", () => {
 		});
 	});
 
+	describe("delete error handling", () => {
+		it("collects error when deleteFile throws and continues other deletes", async () => {
+			const client = createMockClient([]);
+			const state = createMockState({
+				"fail-delete.md": { remoteSha: "sha-1" },
+				"ok-delete.md": { remoteSha: "sha-2" },
+			});
+			const vault = createMockVault();
+			vi.mocked(vault.deleteFile).mockImplementation((path: string) => {
+				if (path === "fail-delete.md") return Promise.reject(new Error("permission denied"));
+				return Promise.resolve();
+			});
+			const logger = createMockLogger();
+			const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+			const result = await engine.pull("main");
+
+			expect(result.deleted).toEqual(["ok-delete.md"]);
+			expect(result.errors).toEqual([{ path: "fail-delete.md", error: "permission denied" }]);
+			// State should only be cleaned for the successful delete
+			expect(state.deleteSHA).toHaveBeenCalledWith("ok-delete.md");
+			expect(state.deleteSHA).not.toHaveBeenCalledWith("fail-delete.md");
+			// Pull should still complete and save state
+			expect(state.setHeadOid).toHaveBeenCalledWith("head-sha");
+			expect(state.save).toHaveBeenCalled();
+		});
+	});
+
+	describe("skipPaths filtering", () => {
+		it("excludes changes in skipPaths set from pull", async () => {
+			const client = createMockClient([
+				{ path: "local-change.md", sha: "sha-local" },
+				{ path: "remote-only.md", sha: "sha-remote" },
+			]);
+			const state = createMockState({});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault });
+
+			const skipPaths = new Set(["local-change.md"]);
+			const result = await engine.pull("main", skipPaths);
+
+			expect(result.created).toEqual(["remote-only.md"]);
+			expect(result.created).not.toContain("local-change.md");
+			expect(vault.writeFile).not.toHaveBeenCalledWith("local-change.md", expect.anything());
+			expect(vault.writeFile).toHaveBeenCalledWith("remote-only.md", expect.any(String));
+		});
+
+		it("skips deletes in skipPaths set", async () => {
+			const client = createMockClient([]);
+			const state = createMockState({
+				"local-edit.md": { remoteSha: "sha-1" },
+				"truly-deleted.md": { remoteSha: "sha-2" },
+			});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault });
+
+			const skipPaths = new Set(["local-edit.md"]);
+			const result = await engine.pull("main", skipPaths);
+
+			expect(result.deleted).toEqual(["truly-deleted.md"]);
+			expect(result.deleted).not.toContain("local-edit.md");
+			expect(vault.deleteFile).not.toHaveBeenCalledWith("local-edit.md");
+			expect(vault.deleteFile).toHaveBeenCalledWith("truly-deleted.md");
+		});
+
+		it("pulls all changes when skipPaths is empty", async () => {
+			const client = createMockClient([
+				{ path: "a.md", sha: "sha-a" },
+				{ path: "b.md", sha: "sha-b" },
+			]);
+			const state = createMockState({});
+			const vault = createMockVault();
+			const { engine } = createEngine({ client, state, vault });
+
+			const result = await engine.pull("main", new Set());
+
+			expect(result.created).toEqual(["a.md", "b.md"]);
+		});
+	});
+
 	describe("syncFolder support", () => {
 		it("filters tree entries to only files inside syncFolder", async () => {
 			const client = createMockClient([

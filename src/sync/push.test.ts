@@ -407,6 +407,65 @@ describe("PushEngine", () => {
 		expect(decoded).toBe("hello world");
 	});
 
+	describe("binary file handling", () => {
+		it("uses arrayBufferToBase64 for binary files with null bytes", async () => {
+			const graphql = createMockGraphQL();
+			const state = createMockState();
+			const vault = createMockVault();
+			// Binary content with null bytes (PNG-like header)
+			const binaryBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]);
+			vi.mocked(vault.readFileBinary).mockImplementation((path: string) => {
+				if (path === "image.png") return Promise.resolve(binaryBytes.buffer as ArrayBuffer);
+				return Promise.resolve(
+					new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer,
+				);
+			});
+			const engine = createPushEngine({ graphql, state, vault });
+
+			const changes: FileChange[] = [{ path: "image.png", type: "create" }];
+			const result = await engine.push(changes, commitOptions);
+
+			expect(result.pushed).toEqual(["image.png"]);
+			// Verify the base64 content decodes to the original binary bytes
+			const call = vi.mocked(graphql.createCommit).mock.calls[0][0];
+			const decoded = atob(call.additions[0].base64Content);
+			const decodedBytes = new Uint8Array([...decoded].map((c) => c.charCodeAt(0)));
+			expect(decodedBytes).toEqual(binaryBytes);
+		});
+
+		it("stores isBinary: true in cache for binary files", async () => {
+			const state = createMockState();
+			const vault = createMockVault();
+			const binaryBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]);
+			vi.mocked(vault.readFileBinary).mockResolvedValue(binaryBytes.buffer as ArrayBuffer);
+			const engine = createPushEngine({ state, vault });
+
+			await engine.push([{ path: "photo.png", type: "create" }], commitOptions);
+
+			expect(state.setSHA).toHaveBeenCalledWith(
+				"photo.png",
+				expect.objectContaining({ isBinary: true }),
+			);
+		});
+
+		it("stores isBinary: false in cache for text files", async () => {
+			const state = createMockState();
+			const vault = createMockVault();
+			// Text content without null bytes
+			vi.mocked(vault.readFileBinary).mockResolvedValue(
+				new TextEncoder().encode("hello world").buffer as ArrayBuffer,
+			);
+			const engine = createPushEngine({ state, vault });
+
+			await engine.push([{ path: "note.md", type: "create" }], commitOptions);
+
+			expect(state.setSHA).toHaveBeenCalledWith(
+				"note.md",
+				expect.objectContaining({ isBinary: false }),
+			);
+		});
+	});
+
 	describe("syncFolder support", () => {
 		it("maps vault paths to repo paths in commit additions", async () => {
 			const graphql = createMockGraphQL();

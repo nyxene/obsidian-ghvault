@@ -278,6 +278,123 @@ describe("ObsidianVaultAdapter", () => {
 		});
 	});
 
+	describe("readFileBinary", () => {
+		it("reads binary content from existing file", async () => {
+			const vault = createMockVault([{ path: "image.png", content: "PNG data", size: 8 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const buffer = await adapter.readFileBinary("image.png");
+
+			expect(buffer).toBeInstanceOf(ArrayBuffer);
+			expect(vault.readBinary).toHaveBeenCalled();
+			const bytes = new Uint8Array(buffer);
+			expect(new TextDecoder().decode(bytes)).toBe("PNG data");
+		});
+
+		it("throws when file does not exist", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await expect(adapter.readFileBinary("missing.png")).rejects.toThrow(
+				"File not found: missing.png",
+			);
+		});
+	});
+
+	describe("writeFileBinary", () => {
+		it("modifies existing file with binary data", async () => {
+			const vault = createMockVault([{ path: "image.png", content: "old", size: 3 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+			const newData = new TextEncoder().encode("new binary").buffer as ArrayBuffer;
+
+			await adapter.writeFileBinary("image.png", newData);
+
+			expect(vault.modifyBinary).toHaveBeenCalled();
+		});
+
+		it("creates new binary file when it does not exist", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+			const data = new TextEncoder().encode("fresh binary").buffer as ArrayBuffer;
+
+			await adapter.writeFileBinary("new-image.png", data);
+
+			expect(vault.createBinary).toHaveBeenCalledWith("new-image.png", data);
+		});
+
+		it("ensures parent directory before creating binary file", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+			const data = new TextEncoder().encode("data").buffer as ArrayBuffer;
+
+			await adapter.writeFileBinary("assets/images/photo.png", data);
+
+			expect(vault.createFolder).toHaveBeenCalledWith("assets/images");
+			expect(vault.createBinary).toHaveBeenCalledWith("assets/images/photo.png", data);
+		});
+	});
+
+	describe("listFiles — binary handling", () => {
+		it("uses readBinary for non-text extensions and returns isBinary: true", async () => {
+			const vault = createMockVault([{ path: "photo.png", content: "\x89PNG\x00", size: 5 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].isBinary).toBe(true);
+			expect(files[0].path).toBe("photo.png");
+			expect(vault.readBinary).toHaveBeenCalled();
+			expect(vault.cachedRead).not.toHaveBeenCalled();
+		});
+
+		it("uses cachedRead for text extensions and returns isBinary: false", async () => {
+			const vault = createMockVault([{ path: "note.md", content: "hello", size: 5 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].isBinary).toBe(false);
+			expect(vault.cachedRead).toHaveBeenCalled();
+			expect(vault.readBinary).not.toHaveBeenCalled();
+		});
+
+		it("handles mixed text and binary files", async () => {
+			const vault = createMockVault([
+				{ path: "readme.md", content: "# Hello", size: 7 },
+				{ path: "logo.png", content: "\x89PNG\x00", size: 5 },
+				{ path: "data.json", content: '{"a":1}', size: 7 },
+				{ path: "photo.jpg", content: "\xff\xd8\xff\x00", size: 4 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(4);
+			const byPath = new Map(files.map((f) => [f.path, f]));
+			expect(byPath.get("readme.md")?.isBinary).toBe(false);
+			expect(byPath.get("data.json")?.isBinary).toBe(false);
+			expect(byPath.get("logo.png")?.isBinary).toBe(true);
+			expect(byPath.get("photo.jpg")?.isBinary).toBe(true);
+
+			// cachedRead for text, readBinary for non-text
+			expect(vault.cachedRead).toHaveBeenCalledTimes(2);
+			expect(vault.readBinary).toHaveBeenCalledTimes(2);
+		});
+
+		it("treats unknown extension as non-text (readBinary path)", async () => {
+			const vault = createMockVault([{ path: "archive.zip", content: "PK\x00\x00", size: 4 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(vault.readBinary).toHaveBeenCalled();
+			expect(vault.cachedRead).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("ensureParentDir", () => {
 		it("creates nested directories for deep paths", async () => {
 			const vault = createMockVault([]);
