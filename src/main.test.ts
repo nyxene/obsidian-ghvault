@@ -594,5 +594,47 @@ describe("GHVaultPlugin", () => {
 			expect(plugin.statusBarEl).toBeNull();
 			expect(plugin.logger).toBeNull();
 		});
+
+		it("does not crash when sync completes after onunload", async () => {
+			let resolveSyncPromise: (value: unknown) => void = () => {};
+			mockSync.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						resolveSyncPromise = resolve;
+					}),
+			);
+
+			const { plugin, statusBarEl } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			// Start sync (will hang on the promise)
+			const syncPromise = plugin.runSync();
+
+			// Unload plugin while sync is in progress
+			await plugin.onunload();
+			expect(plugin.syncEngine).toBeNull();
+			expect(plugin.statusBarEl).toBeNull();
+
+			// Now resolve the sync — should not crash
+			resolveSyncPromise({
+				pull: { created: ["a.md"], modified: [], deleted: [], errors: [] },
+				push: null,
+				conflicts: [],
+			});
+
+			// Wait for runSync to complete — no throw expected
+			await syncPromise;
+
+			// statusBarEl.setText was called with "syncing..." before unload,
+			// but "idle" after resolve should be skipped (statusBarEl is null)
+			const calls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]);
+			// Should have "idle" from onload and "syncing..." from runSync,
+			// but NOT "idle" after sync completes (statusBarEl is null)
+			expect(calls).toContain("GHVault: idle");
+			expect(calls).toContain("GHVault: syncing...");
+			// The last call should be "syncing..." not "idle" (since statusBarEl was null)
+			expect(calls[calls.length - 1]).toBe("GHVault: syncing...");
+		});
 	});
 });

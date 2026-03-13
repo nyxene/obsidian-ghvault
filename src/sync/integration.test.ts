@@ -699,6 +699,45 @@ describe("Sync integration", () => {
 		});
 	});
 
+	describe("auth error between pull and push", () => {
+		it("preserves pull state when push throws GitHubAuthError", async () => {
+			const { engine, vault, graphql, state } = createIntegrationSetup({
+				localFiles: [{ path: "local.md", content: "local content" }],
+				remoteFiles: [
+					{ path: "remote.md", sha: "sha-remote", content: "remote content", size: 14 },
+				],
+			});
+
+			// Push fails with auth error
+			vi.mocked(graphql.createCommit).mockRejectedValue(
+				new Error("Authentication failed. Check your GitHub token."),
+			);
+
+			await expect(engine.sync()).rejects.toThrow("Authentication failed");
+
+			// Pull should have written the remote file before push failed
+			expect(vault.files.get("remote.md")).toBe("remote content");
+			// State from pull should have been persisted (pull saves before push runs)
+			expect(state.getHeadOid()).toBe("aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33");
+		});
+	});
+
+	describe("GraphQL conflict error (stale HEAD OID)", () => {
+		it("propagates conflict error when push HEAD OID is stale", async () => {
+			const { engine, graphql } = createIntegrationSetup({
+				localFiles: [{ path: "file.md", content: "local content" }],
+				remoteFiles: [],
+			});
+
+			vi.mocked(graphql.createCommit).mockRejectedValue(
+				new Error("Conflict: remote has changed since last sync."),
+			);
+
+			await expect(engine.sync()).rejects.toThrow("Conflict: remote has changed since last sync.");
+			expect(engine.isSyncing).toBe(false);
+		});
+	});
+
 	describe("network failure during pull — partial results", () => {
 		it("succeeds for some files and reports errors for failed ones", async () => {
 			const { engine, vault, client } = createIntegrationSetup({
