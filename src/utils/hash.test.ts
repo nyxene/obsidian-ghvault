@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGitBlobSha, computeHash } from "./hash";
+import { computeGitBlobSha, computeHash, computeHashFromBuffer } from "./hash";
 
 describe("computeHash", () => {
 	it("returns a 64-char hex string", async () => {
@@ -68,5 +68,41 @@ describe("computeGitBlobSha", () => {
 		const shaShort = await computeGitBlobSha(short);
 		const shaLong = await computeGitBlobSha(long);
 		expect(shaShort).not.toBe(shaLong);
+	});
+});
+
+describe("computeHashFromBuffer", () => {
+	it("produces same hash as computeHash for same content (Uint8Array input)", async () => {
+		const text = "hello";
+		const hashFromString = await computeHash(text);
+		const hashFromBuffer = await computeHashFromBuffer(new TextEncoder().encode(text));
+		expect(hashFromBuffer).toBe(hashFromString);
+	});
+
+	it("produces same hash as computeHash for same content (ArrayBuffer input)", async () => {
+		const text = "hello";
+		const hashFromString = await computeHash(text);
+		const buffer = new TextEncoder().encode(text).buffer as ArrayBuffer;
+		const hashFromBuffer = await computeHashFromBuffer(buffer);
+		expect(hashFromBuffer).toBe(hashFromString);
+	});
+
+	it("handles empty Uint8Array", async () => {
+		const hashFromString = await computeHash("");
+		const hashFromBuffer = await computeHashFromBuffer(new Uint8Array(0));
+		expect(hashFromBuffer).toBe(hashFromString);
+	});
+
+	it("handles binary data with null bytes", async () => {
+		const bytes = new Uint8Array([0x00, 0x89, 0x50, 0x00, 0xff]);
+		const hash = await computeHashFromBuffer(bytes);
+		expect(hash).toHaveLength(64);
+		expect(hash).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it("returns 64-char hex string", async () => {
+		const hash = await computeHashFromBuffer(new TextEncoder().encode("test"));
+		expect(hash).toHaveLength(64);
+		expect(hash).toMatch(/^[0-9a-f]{64}$/);
 	});
 });
