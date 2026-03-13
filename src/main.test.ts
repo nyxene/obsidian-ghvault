@@ -293,6 +293,23 @@ describe("GHVaultPlugin", () => {
 			expect(plugin.settings.branch).toBe("main"); // from defaults
 		});
 
+		it("defaults non-string values to empty string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: {
+					githubToken: 12345,
+					owner: true,
+					repo: ["array"],
+					branch: null,
+					syncFolder: { nested: "object" },
+				},
+			});
+			expect(plugin.settings.githubToken).toBe("");
+			expect(plugin.settings.owner).toBe("");
+			expect(plugin.settings.repo).toBe("");
+			expect(plugin.settings.branch).toBe("main"); // falls back to default
+			expect(plugin.settings.syncFolder).toBe("");
+		});
+
 		it("resets invalid logLevel to default", async () => {
 			const { plugin } = await loadPlugin({
 				settings: { logLevel: "INVALID_LEVEL" },
@@ -406,6 +423,17 @@ describe("GHVaultPlugin", () => {
 			await expect(onTestConnection()).rejects.toThrow("401 Unauthorized");
 
 			expect(lastNotice().message).toBe("GHVault: Connection failed — 401 Unauthorized");
+		});
+
+		it("handles non-Error throw with String() fallback", async () => {
+			mockGetRepoInfo.mockRejectedValue("string error without Error wrapper");
+
+			const { onTestConnection } = await loadPlugin(CONFIGURED_SETTINGS);
+			await expect(onTestConnection()).rejects.toBe("string error without Error wrapper");
+
+			expect(lastNotice().message).toBe(
+				"GHVault: Connection failed — string error without Error wrapper",
+			);
 		});
 
 		it("redacts tokens in failure notice", async () => {

@@ -449,6 +449,39 @@ describe("GHVaultSettingTab", () => {
 		});
 	});
 
+	describe("rapid onChange", () => {
+		it("persists only the last value after multiple fast changes", async () => {
+			const { tab, callbacks, settings } = createTab({ owner: "" });
+			tab.display();
+			const ownerSetting = findSettingByName("Repository owner");
+			const textComponent = ownerSetting.textComponents[0];
+
+			// Simulate rapid typing without waiting between changes
+			await textComponent.simulateChange("a");
+			await textComponent.simulateChange("ab");
+			await textComponent.simulateChange("abc");
+
+			expect(settings.owner).toBe("abc");
+			expect(callbacks.onSave).toHaveBeenCalledTimes(3);
+			// Last call should have the final value
+			const lastCall = vi.mocked(callbacks.onSave).mock.calls[2][0];
+			expect(lastCall.owner).toBe("abc");
+		});
+	});
+
+	describe("saveSettings error propagation", () => {
+		it("propagates error when onSave rejects", async () => {
+			const onSave = vi.fn().mockRejectedValue(new Error("saveData failed"));
+			const { tab } = createTab({ githubToken: "" }, { onSave });
+			tab.display();
+			const tokenSetting = findSettingByName("GitHub token");
+
+			await expect(tokenSetting.textComponents[0].simulateChange("ghp_test")).rejects.toThrow(
+				"saveData failed",
+			);
+		});
+	});
+
 	describe("test connection button", () => {
 		it("shows error when settings are incomplete", async () => {
 			vi.useFakeTimers();
