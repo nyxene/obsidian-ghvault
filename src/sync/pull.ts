@@ -1,8 +1,9 @@
 import type { GitHubClient } from "../github/client";
 import type { FileChange, GitHubRef, SHACacheEntry } from "../types";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
+import { hasBinaryContent, toSafeArrayBuffer } from "../utils/binary";
 import { pMap } from "../utils/concurrency";
-import { computeGitBlobSha, computeHash } from "../utils/hash";
+import { computeGitBlobSha, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { isSafePath, toRepoPath, toVaultPath } from "../utils/path";
 import { computeRemoteChanges } from "./comparator";
@@ -10,6 +11,7 @@ import type { SyncStateManager } from "./state";
 
 export interface VaultAdapter {
 	writeFile(path: string, content: string): Promise<void>;
+	writeFileBinary(path: string, data: ArrayBuffer): Promise<void>;
 	deleteFile(path: string): Promise<void>;
 }
 
@@ -197,25 +199,22 @@ export class PullEngine {
 						return;
 					}
 
-					if (isBinaryContent(rawBytes)) {
-						this.logger.warn("Skipping binary file", { path: change.path });
-						result.errors.push({
-							path: change.path,
-							error: "Binary file — not supported in current version",
-						});
-						return;
-					}
+					const isBinary = hasBinaryContent(rawBytes);
+					const contentHash = await computeHashFromBuffer(rawBytes);
 
-					const content = new TextDecoder().decode(rawBytes);
-					const contentHash = await computeHash(content);
-					await this.vault.writeFile(change.path, content);
+					if (isBinary) {
+						await this.vault.writeFileBinary(change.path, toSafeArrayBuffer(rawBytes));
+					} else {
+						const content = new TextDecoder().decode(rawBytes);
+						await this.vault.writeFile(change.path, content);
+					}
 
 					const entry: SHACacheEntry = {
 						remoteSha: file.sha,
 						localContentHash: contentHash,
 						lastSyncedAt: Date.now(),
 						size: file.size,
-						isBinary: false,
+						isBinary,
 					};
 					this.state.setSHA(change.path, entry);
 
@@ -320,16 +319,6 @@ export class PullEngine {
 		}
 		return map;
 	}
-}
-
-const BINARY_CHECK_BYTES = 8192;
-
-function isBinaryContent(bytes: Uint8Array): boolean {
-	const limit = Math.min(bytes.length, BINARY_CHECK_BYTES);
-	for (let i = 0; i < limit; i++) {
-		if (bytes[i] === 0) return true;
-	}
-	return false;
 }
 
 const BASE64_RE = /^[A-Za-z0-9+/\n]+=*\n?$/;

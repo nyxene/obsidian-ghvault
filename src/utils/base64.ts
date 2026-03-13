@@ -35,3 +35,11 @@ export function base64ToBytes(encoded: string): Uint8Array {
 	}
 	return bytes;
 }
+
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+	return bytesToBase64(new Uint8Array(buffer));
+}
+
+export function base64ToArrayBuffer(encoded: string): ArrayBuffer {
+	return base64ToBytes(encoded).buffer as ArrayBuffer;
+}

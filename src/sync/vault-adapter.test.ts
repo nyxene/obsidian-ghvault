@@ -6,6 +6,10 @@ vi.mock("../utils/hash", () => ({
 	computeHash: vi
 		.fn()
 		.mockImplementation((content: string) => Promise.resolve(`hash-${content.length}`)),
+	computeHashFromBuffer: vi.fn().mockImplementation((data: ArrayBuffer | Uint8Array) => {
+		const len = data instanceof Uint8Array ? data.length : data.byteLength;
+		return Promise.resolve(`hash-${len}`);
+	}),
 }));
 
 // ---------------------------------------------------------------------------
@@ -54,6 +58,11 @@ function createMockVault(files: MockFileEntry[] = []): Vault {
 			if (!entry) throw new Error(`File not found: ${file.path}`);
 			return entry.content;
 		}),
+		readBinary: vi.fn(async (file: TFile) => {
+			const entry = fileMap.get(file.path);
+			if (!entry) throw new Error(`File not found: ${file.path}`);
+			return new TextEncoder().encode(entry.content).buffer as ArrayBuffer;
+		}),
 		cachedRead: vi.fn(async (file: TFile) => {
 			const entry = fileMap.get(file.path);
 			if (!entry) throw new Error(`File not found: ${file.path}`);
@@ -65,10 +74,24 @@ function createMockVault(files: MockFileEntry[] = []): Vault {
 				entry.content = content;
 			}
 		}),
+		modifyBinary: vi.fn(async (file: TFile, data: ArrayBuffer) => {
+			const entry = fileMap.get(file.path);
+			if (entry) {
+				entry.content = new TextDecoder().decode(data);
+			}
+		}),
 		create: vi.fn(async (path: string, content: string) => {
 			const f: MockFileEntry = { path, content, size: content.length };
 			fileMap.set(path, f);
 			const tf = createMockFile(path, content.length);
+			tfiles.set(path, tf);
+			return tf;
+		}),
+		createBinary: vi.fn(async (path: string, data: ArrayBuffer) => {
+			const content = new TextDecoder().decode(data);
+			const f: MockFileEntry = { path, content, size: data.byteLength };
+			fileMap.set(path, f);
+			const tf = createMockFile(path, data.byteLength);
 			tfiles.set(path, tf);
 			return tf;
 		}),

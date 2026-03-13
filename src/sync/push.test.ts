@@ -10,6 +10,10 @@ vi.mock("../utils/hash", () => ({
 	computeHash: vi
 		.fn()
 		.mockImplementation((content: string) => Promise.resolve(`hash-${content.length}`)),
+	computeHashFromBuffer: vi.fn().mockImplementation((data: ArrayBuffer | Uint8Array) => {
+		const len = data instanceof Uint8Array ? data.length : data.byteLength;
+		return Promise.resolve(`hash-${len}`);
+	}),
 	computeGitBlobSha: vi.fn().mockImplementation(() => Promise.resolve("computed-blob-sha")),
 }));
 
@@ -32,7 +36,10 @@ function createMockState(headOid = "current-head"): SyncStateManager {
 
 function createMockVault(): VaultReader {
 	return {
-		readFile: vi.fn().mockImplementation((path: string) => Promise.resolve(`content of ${path}`)),
+		readFileBinary: vi.fn().mockImplementation((path: string) => {
+			const bytes = new TextEncoder().encode(`content of ${path}`);
+			return Promise.resolve(bytes.buffer as ArrayBuffer);
+		}),
 	};
 }
 
@@ -97,7 +104,7 @@ describe("PushEngine", () => {
 
 		expect(result.pushed).toEqual(["new.md"]);
 		expect(result.oid).toBe("new-oid");
-		expect(vault.readFile).toHaveBeenCalledWith("new.md");
+		expect(vault.readFileBinary).toHaveBeenCalledWith("new.md");
 		expect(graphql.createCommit).toHaveBeenCalledWith(
 			expect.objectContaining({
 				additions: [{ path: "new.md", base64Content: expect.any(String) }],
@@ -117,7 +124,7 @@ describe("PushEngine", () => {
 		const result = await engine.push(changes, commitOptions);
 
 		expect(result.pushed).toEqual(["doc.md"]);
-		expect(vault.readFile).toHaveBeenCalledWith("doc.md");
+		expect(vault.readFileBinary).toHaveBeenCalledWith("doc.md");
 	});
 
 	it("pushes deletions", async () => {
@@ -130,7 +137,7 @@ describe("PushEngine", () => {
 		const result = await engine.push(changes, commitOptions);
 
 		expect(result.deleted).toEqual(["old.md"]);
-		expect(vault.readFile).not.toHaveBeenCalled();
+		expect(vault.readFileBinary).not.toHaveBeenCalled();
 		expect(graphql.createCommit).toHaveBeenCalledWith(
 			expect.objectContaining({
 				additions: [],
@@ -231,10 +238,10 @@ describe("PushEngine", () => {
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const bigContent = "x".repeat(51 * 1024 * 1024);
-		vi.mocked(vault.readFile).mockImplementation((path: string) => {
-			if (path === "huge.bin") return Promise.resolve(bigContent);
-			return Promise.resolve(`content of ${path}`);
+		const bigBytes = new Uint8Array(51 * 1024 * 1024);
+		vi.mocked(vault.readFileBinary).mockImplementation((path: string) => {
+			if (path === "huge.bin") return Promise.resolve(bigBytes.buffer as ArrayBuffer);
+			return Promise.resolve(new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer);
 		});
 		const engine = createPushEngine({ graphql, state, vault, logger });
 
@@ -276,10 +283,10 @@ describe("PushEngine", () => {
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const bigContent = "x".repeat(51 * 1024 * 1024);
-		vi.mocked(vault.readFile).mockImplementation((path: string) => {
-			if (path === "huge.bin") return Promise.resolve(bigContent);
-			return Promise.resolve(`content of ${path}`);
+		const bigBytes = new Uint8Array(51 * 1024 * 1024);
+		vi.mocked(vault.readFileBinary).mockImplementation((path: string) => {
+			if (path === "huge.bin") return Promise.resolve(bigBytes.buffer as ArrayBuffer);
+			return Promise.resolve(new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer);
 		});
 		const engine = createPushEngine({ graphql, state, vault, logger });
 
@@ -301,10 +308,10 @@ describe("PushEngine", () => {
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const largeContent = "x".repeat(1.6 * 1024 * 1024); // ~1.6MB
-		vi.mocked(vault.readFile).mockImplementation((path: string) => {
-			if (path === "large.bin") return Promise.resolve(largeContent);
-			return Promise.resolve(`content of ${path}`);
+		const largeBytes = new Uint8Array(1.6 * 1024 * 1024); // ~1.6MB of zeros
+		vi.mocked(vault.readFileBinary).mockImplementation((path: string) => {
+			if (path === "large.bin") return Promise.resolve(largeBytes.buffer as ArrayBuffer);
+			return Promise.resolve(new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer);
 		});
 		const engine = createPushEngine({ graphql, state, vault, logger });
 
@@ -359,7 +366,7 @@ describe("PushEngine", () => {
 		const result = await engine.push(changes, commitOptions);
 
 		expect(result.pushed).toEqual(["small.md"]);
-		expect(vault.readFile).not.toHaveBeenCalledWith("huge.bin");
+		expect(vault.readFileBinary).not.toHaveBeenCalledWith("huge.bin");
 		expect(logger.warn).toHaveBeenCalledWith("Skipping oversized file (pre-check)", {
 			path: "huge.bin",
 			size: oversized,
@@ -371,10 +378,12 @@ describe("PushEngine", () => {
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
-		const justUnderContent = "x".repeat(1.4 * 1024 * 1024); // ~1.4MB
-		vi.mocked(vault.readFile).mockImplementation((path: string) => {
-			if (path === "medium.bin") return Promise.resolve(justUnderContent);
-			return Promise.resolve(`content of ${path}`);
+		const justUnderBytes = new Uint8Array(1.4 * 1024 * 1024); // ~1.4MB
+		// Fill with non-zero to avoid binary detection
+		justUnderBytes.fill(0x78); // 'x'
+		vi.mocked(vault.readFileBinary).mockImplementation((path: string) => {
+			if (path === "medium.bin") return Promise.resolve(justUnderBytes.buffer as ArrayBuffer);
+			return Promise.resolve(new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer);
 		});
 		const engine = createPushEngine({ graphql, state, vault, logger });
 
@@ -387,7 +396,8 @@ describe("PushEngine", () => {
 	it("encodes file content to base64", async () => {
 		const graphql = createMockGraphQL();
 		const vault = createMockVault();
-		vi.mocked(vault.readFile).mockResolvedValue("hello world");
+		const helloBytes = new TextEncoder().encode("hello world");
+		vi.mocked(vault.readFileBinary).mockResolvedValue(helloBytes.buffer as ArrayBuffer);
 		const engine = createPushEngine({ graphql, vault });
 
 		await engine.push([{ path: "f.md", type: "create" }], commitOptions);

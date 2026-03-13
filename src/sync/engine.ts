@@ -8,7 +8,9 @@ import type { SyncStateManager } from "./state";
 
 export interface SyncVault {
 	readFile(path: string): Promise<string>;
+	readFileBinary(path: string): Promise<ArrayBuffer>;
 	writeFile(path: string, content: string): Promise<void>;
+	writeFileBinary(path: string, data: ArrayBuffer): Promise<void>;
 	deleteFile(path: string): Promise<void>;
 	listFiles(): Promise<LocalFileInfo[]>;
 }

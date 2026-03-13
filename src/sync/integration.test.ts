@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import type { GitHubGraphQL } from "../github/graphql";
 import type { SHACacheEntry } from "../types";
-import { computeGitBlobSha, computeHash } from "../utils/hash";
+import { computeGitBlobSha, computeHash, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import type { SyncVault } from "./engine";
@@ -13,8 +13,9 @@ import type { StorageAdapter } from "./state";
 import { SyncStateManager } from "./state";
 
 vi.mock("../utils/hash", () => ({
-	computeHash: vi.fn(),
-	computeGitBlobSha: vi.fn(),
+	computeHash: vi.fn().mockResolvedValue("mock-hash"),
+	computeHashFromBuffer: vi.fn().mockResolvedValue("mock-hash"),
+	computeGitBlobSha: vi.fn().mockResolvedValue("mock-blob-sha"),
 }));
 
 // ---------------------------------------------------------------------------
@@ -41,8 +42,16 @@ function createMockVaultAdapter(initialFiles: MockVaultFile[] = []): SyncVault &
 			if (content === undefined) throw new Error(`File not found: ${path}`);
 			return content;
 		}),
+		readFileBinary: vi.fn(async (path: string): Promise<ArrayBuffer> => {
+			const content = files.get(path);
+			if (content === undefined) throw new Error(`File not found: ${path}`);
+			return new TextEncoder().encode(content).buffer as ArrayBuffer;
+		}),
 		writeFile: vi.fn(async (path: string, content: string): Promise<void> => {
 			files.set(path, content);
+		}),
+		writeFileBinary: vi.fn(async (path: string, data: ArrayBuffer): Promise<void> => {
+			files.set(path, new TextDecoder().decode(data));
 		}),
 		deleteFile: vi.fn(async (path: string): Promise<void> => {
 			files.delete(path);
@@ -94,6 +103,7 @@ function createMockGitHubClient(
 			const file = remoteFiles.find((f) => f.path === path);
 			if (!file) return Promise.reject(new Error(`Not found: ${path}`));
 			vi.mocked(computeGitBlobSha).mockResolvedValueOnce(file.sha);
+			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce(`hash-${file.path}`);
 			return Promise.resolve({
 				content: btoa(file.content),
 				sha: file.sha,
@@ -702,6 +712,7 @@ describe("Sync integration", () => {
 			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
 				if (path === "fail.md") return Promise.reject(new Error("connection reset"));
 				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-ok");
+				vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("hash-ok");
 				return Promise.resolve({ content: btoa("ok content"), sha: "sha-ok", size: 10 });
 			});
 

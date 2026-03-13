@@ -1,7 +1,8 @@
 import type { GitHubGraphQL } from "../github/graphql";
 import type { FileChange } from "../types";
-import { toBase64 } from "../utils/base64";
-import { computeGitBlobSha, computeHash } from "../utils/hash";
+import { arrayBufferToBase64, toBase64 } from "../utils/base64";
+import { hasBinaryContent } from "../utils/binary";
+import { computeGitBlobSha, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { isSafePath, toRepoPath } from "../utils/path";
 import type { SyncStateManager } from "./state";
@@ -10,7 +11,7 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const MAX_GRAPHQL_FILE_SIZE = 1.5 * 1024 * 1024; // 1.5MB — GraphQL ~2MB base64 limit
 
 export interface VaultReader {
-	readFile(path: string): Promise<string>;
+	readFileBinary(path: string): Promise<ArrayBuffer>;
 }
 
 export interface PushResult {
@@ -61,7 +62,10 @@ export class PushEngine {
 
 		const additions = [];
 		const deletions = [];
-		const contentHashes = new Map<string, { hash: string; size: number; blobSha: string }>();
+		const contentHashes = new Map<
+			string,
+			{ hash: string; size: number; blobSha: string; isBinary: boolean }
+		>();
 
 		for (const change of changes) {
 			if (!isSafePath(change.path)) {
@@ -77,8 +81,13 @@ export class PushEngine {
 					});
 					continue;
 				}
-				const content = await this.vault.readFile(change.path);
-				const contentSize = new TextEncoder().encode(content).length;
+
+				// Read as binary to handle both text and binary files
+				const rawBuffer = await this.vault.readFileBinary(change.path);
+				const rawBytes = new Uint8Array(rawBuffer);
+				const contentSize = rawBytes.length;
+				const isBinary = hasBinaryContent(rawBytes);
+
 				if (contentSize > MAX_FILE_SIZE) {
 					this.logger.warn("Skipping oversized file", {
 						path: change.path,
@@ -94,13 +103,15 @@ export class PushEngine {
 					});
 					continue;
 				}
-				const base64Content = toBase64(content);
-				const hash = await computeHash(content);
-				const contentBytes = new TextEncoder().encode(content);
-				const blobSha = await computeGitBlobSha(contentBytes);
+
+				const base64Content = isBinary
+					? arrayBufferToBase64(rawBuffer)
+					: toBase64(new TextDecoder().decode(rawBytes));
+				const hash = await computeHashFromBuffer(rawBytes);
+				const blobSha = await computeGitBlobSha(rawBytes);
 				const repoPath = toRepoPath(change.path, this.syncFolder);
 				additions.push({ path: repoPath, base64Content });
-				contentHashes.set(change.path, { hash, size: contentSize, blobSha });
+				contentHashes.set(change.path, { hash, size: contentSize, blobSha, isBinary });
 				result.pushed.push(change.path);
 			} else if (change.type === "delete") {
 				const repoPath = toRepoPath(change.path, this.syncFolder);
@@ -134,7 +145,7 @@ export class PushEngine {
 				localContentHash: info?.hash ?? "",
 				lastSyncedAt: Date.now(),
 				size: info?.size ?? 0,
-				isBinary: false,
+				isBinary: info?.isBinary ?? false,
 			});
 		}
 		for (const path of result.deleted) {
