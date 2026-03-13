@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
-import { computeGitBlobSha, computeHash } from "../utils/hash";
+import { computeGitBlobSha, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import type { VaultAdapter } from "./pull";
 import { PullEngine } from "./pull";
@@ -12,6 +12,10 @@ vi.mock("../utils/hash", () => ({
 	computeHash: vi
 		.fn()
 		.mockImplementation((content: string) => Promise.resolve(`hash-${content.length}`)),
+	computeHashFromBuffer: vi.fn().mockImplementation((data: ArrayBuffer | Uint8Array) => {
+		const len = data instanceof Uint8Array ? data.length : data.byteLength;
+		return Promise.resolve(`hash-${len}`);
+	}),
 }));
 
 function createMockClient(
@@ -68,6 +72,7 @@ function createMockState(cache: Record<string, { remoteSha: string }> = {}): Syn
 function createMockVault(): VaultAdapter {
 	return {
 		writeFile: vi.fn().mockResolvedValue(undefined),
+		writeFileBinary: vi.fn().mockResolvedValue(undefined),
 		deleteFile: vi.fn().mockResolvedValue(undefined),
 	};
 }
@@ -311,12 +316,12 @@ describe("PullEngine", () => {
 		const vault = createMockVault();
 		const { engine } = createEngine({ client, state, vault });
 
-		vi.mocked(computeHash).mockResolvedValueOnce("computed-content-hash");
+		vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("computed-content-hash");
 
 		const result = await engine.pull("main");
 
 		expect(result.created).toEqual(["new.md"]);
-		expect(computeHash).toHaveBeenCalledWith("content of new.md");
+		expect(computeHashFromBuffer).toHaveBeenCalled();
 		expect(state.setSHA).toHaveBeenCalledWith(
 			"new.md",
 			expect.objectContaining({
@@ -326,9 +331,9 @@ describe("PullEngine", () => {
 		);
 	});
 
-	it("skips binary files containing null bytes", async () => {
+	it("writes binary files via writeFileBinary", async () => {
 		const client = createMockClient([{ path: "image.png", sha: "sha-img" }]);
-		// Return base64 of binary content with null byte
+		// Return base64 of binary content with null byte (PNG header)
 		const binaryBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]);
 		const binaryStr = String.fromCharCode(...binaryBytes);
 		vi.mocked(client.getFileContent).mockResolvedValue({
@@ -344,11 +349,44 @@ describe("PullEngine", () => {
 
 		const result = await engine.pull("main");
 
-		expect(result.created).toEqual([]);
-		expect(result.errors).toEqual([
-			{ path: "image.png", error: "Binary file — not supported in current version" },
-		]);
+		expect(result.created).toEqual(["image.png"]);
+		expect(result.errors).toEqual([]);
+		expect(vault.writeFileBinary).toHaveBeenCalledWith("image.png", expect.any(ArrayBuffer));
 		expect(vault.writeFile).not.toHaveBeenCalled();
+		expect(state.setSHA).toHaveBeenCalledWith(
+			"image.png",
+			expect.objectContaining({ isBinary: true }),
+		);
+	});
+
+	it("treats text file with null byte as binary (false positive handled correctly)", async () => {
+		const client = createMockClient([{ path: "data.csv", sha: "sha-csv" }]);
+		// CSV-like content with an embedded null byte — detected as binary
+		const contentWithNull = "id,name\n1,test\x002,hello\n";
+		const bytes = new Uint8Array([...contentWithNull].map((c) => c.charCodeAt(0)));
+		const binaryStr = String.fromCharCode(...bytes);
+		vi.mocked(client.getFileContent).mockResolvedValue({
+			content: btoa(binaryStr),
+			sha: "sha-csv",
+			size: bytes.length,
+		});
+		vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-csv");
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual(["data.csv"]);
+		expect(result.errors).toEqual([]);
+		// File with null byte is treated as binary — written via writeFileBinary
+		expect(vault.writeFileBinary).toHaveBeenCalledWith("data.csv", expect.any(ArrayBuffer));
+		expect(vault.writeFile).not.toHaveBeenCalled();
+		expect(state.setSHA).toHaveBeenCalledWith(
+			"data.csv",
+			expect.objectContaining({ isBinary: true }),
+		);
 	});
 
 	it("throws on invalid base64 content from GitHub API", async () => {

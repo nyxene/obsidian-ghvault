@@ -407,3 +407,61 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 **Steps:**
 1. Run `npm run check:obsidian`
 **Expected:** "No Node.js imports" — PASS
+
+---
+
+## Group N: Binary File Support
+
+### TC-BIN-001: Pull PNG image from repo
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Repo contains a PNG image (e.g., `screenshot.png`)
+**Steps:**
+1. Sync from empty vault
+**Expected:** Image file appears in vault, opens correctly in Obsidian
+
+### TC-BIN-002: Push local image to repo
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Initial sync complete
+**Steps:**
+1. Add a PNG or JPEG image to vault
+2. Sync
+**Expected:** Image appears on GitHub, binary content intact (not corrupted)
+
+### TC-BIN-003: Modify binary file remotely and pull
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Image exists in both vault and repo
+**Steps:**
+1. Replace the image on GitHub (upload new version via web UI)
+2. Sync in Obsidian
+**Expected:** Local image updated to match remote version
+
+### TC-BIN-004: PDF file round-trip
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Add a PDF file to vault
+2. Sync (push)
+3. Modify the PDF on GitHub
+4. Sync again (pull)
+**Expected:** PDF pushed and pulled correctly, readable after round-trip
+
+### TC-BIN-005: Mixed sync — text and binary files together
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Repo has both .md and .png files
+**Steps:**
+1. Add a new .md file and a new .png file locally
+2. Add a new .md file and a new .png file on GitHub
+3. Sync
+**Expected:** All 4 files synced correctly in both directions
+
+### TC-BIN-006: Binary file with null bytes in first 8KB
+**Priority:** P2
+**Platform:** Desktop
+**Steps:**
+1. Add a file that contains null bytes (e.g., compiled binary, .zip archive)
+2. Sync
+**Expected:** File detected as binary, pushed with correct encoding, pullable

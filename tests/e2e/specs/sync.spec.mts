@@ -28,6 +28,21 @@ async function computeGitBlobSha(content: string): Promise<string> {
 	}, content);
 }
 
+async function computeGitBlobShaFromBytes(bytes: number[]): Promise<string> {
+	return browser.executeObsidian(async (_obs, b: number[]) => {
+		const encoder = new TextEncoder();
+		const data = new Uint8Array(b);
+		const prefix = encoder.encode(`blob ${data.length}\0`);
+		const combined = new Uint8Array(prefix.length + data.length);
+		combined.set(prefix);
+		combined.set(data, prefix.length);
+		const buffer = await crypto.subtle.digest("SHA-1", combined);
+		return Array.from(new Uint8Array(buffer))
+			.map((b: number) => b.toString(16).padStart(2, "0"))
+			.join("");
+	}, bytes);
+}
+
 async function computeContentHash(content: string): Promise<string> {
 	return browser.executeObsidian(async (_obs, c: string) => {
 		const data = new TextEncoder().encode(c);
@@ -67,7 +82,7 @@ async function ensureSyncEngine(syncFolder = ""): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function injectMocks(
-	remoteFiles: Array<{ path: string; sha: string; content: string; size: number }>,
+	remoteFiles: Array<{ path: string; sha: string; content: string; size: number; base64Content?: string }>,
 	options?: {
 		headSha?: string;
 		pushOid?: string;
@@ -112,7 +127,8 @@ async function injectMocks(
 				getFileContent: async (path: string) => {
 					const file = (files as any[]).find((f: any) => f.path === path);
 					if (!file) throw new Error(`Not found: ${path}`);
-					return { content: btoa(file.content), sha: file.sha, size: file.size };
+					const b64 = file.base64Content ?? btoa(file.content);
+					return { content: b64, sha: file.sha, size: file.size };
 				},
 				createFile: async () => ({ sha: "init-sha", commitSha: hs }),
 			};
@@ -156,6 +172,35 @@ async function getSyncState(): Promise<any> {
 		const data = await plugin.loadData();
 		return data?.syncState ?? null;
 	});
+}
+
+async function readBinaryFile(path: string): Promise<number[]> {
+	return browser.executeObsidian(async ({ app }, p: string) => {
+		const file = app.vault.getFileByPath(p);
+		if (!file) throw new Error(`File not found: ${p}`);
+		const buffer = await app.vault.readBinary(file);
+		return Array.from(new Uint8Array(buffer));
+	}, path);
+}
+
+async function writeBinaryFile(path: string, bytes: number[]): Promise<void> {
+	await browser.executeObsidian(async ({ app }, p: string, b: number[]) => {
+		const data = new Uint8Array(b).buffer;
+		const existing = app.vault.getFileByPath(p);
+		if (existing) {
+			await app.vault.modifyBinary(existing, data);
+		} else {
+			// Ensure parent directory exists
+			const parts = p.split("/");
+			if (parts.length > 1) {
+				const dir = parts.slice(0, -1).join("/");
+				if (!app.vault.getFolderByPath(dir)) {
+					await app.vault.createFolder(dir);
+				}
+			}
+			await app.vault.createBinary(p, data);
+		}
+	}, path, bytes);
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -607,5 +652,119 @@ describe("sync state persistence", () => {
 		const second = await runSync();
 		expect(second.pull.created).toHaveLength(0);
 		expect(second.pull.modified).toHaveLength(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Group 7: Binary File Support
+// ---------------------------------------------------------------------------
+describe("binary file support", () => {
+	// Realistic fake PNG >8KB to exercise the full binary detection scan (8192 bytes)
+	const PNG_HEADER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+	const IHDR_CHUNK = [
+		0x00, 0x00, 0x00, 0x0d, // chunk length: 13
+		0x49, 0x48, 0x44, 0x52, // "IHDR"
+		0x00, 0x00, 0x00, 0x40, // width: 64
+		0x00, 0x00, 0x00, 0x40, // height: 64
+		0x08, 0x02,             // bit depth: 8, color type: RGB
+		0x00, 0x00, 0x00,       // compression, filter, interlace
+		0x00, 0x00, 0x00, 0x00, // CRC placeholder
+	];
+	// IDAT chunk: fill with >8KB of pseudo-pixel data (null bytes throughout)
+	const IDAT_BODY = Array.from({ length: 9000 }, (_, i) => (i % 256 === 0 ? 0x00 : (i & 0xff)));
+	const IDAT_HEADER = [
+		(IDAT_BODY.length >> 24) & 0xff, (IDAT_BODY.length >> 16) & 0xff,
+		(IDAT_BODY.length >> 8) & 0xff, IDAT_BODY.length & 0xff,
+		0x49, 0x44, 0x41, 0x54, // "IDAT"
+	];
+	const IEND_CHUNK = [0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
+	const FAKE_PNG = [...PNG_HEADER, ...IHDR_CHUNK, ...IDAT_HEADER, ...IDAT_BODY, ...IEND_CHUNK];
+
+	function bytesToBase64(bytes: number[]): string {
+		return btoa(String.fromCharCode(...bytes));
+	}
+
+	it("pulls binary file from remote into vault", async () => {
+		await ensureSyncEngine();
+
+		const base64Content = bytesToBase64(FAKE_PNG);
+		const sha = await computeGitBlobShaFromBytes(FAKE_PNG);
+
+		await injectMocks([
+			{ path: "image.png", sha, content: "", size: FAKE_PNG.length, base64Content },
+		]);
+
+		const result = await runSync();
+
+		expect(result.pull.created).toContain("image.png");
+		expect(result.pull.errors).toHaveLength(0);
+
+		const readBytes = await readBinaryFile("image.png");
+		expect(readBytes).toEqual(FAKE_PNG);
+	});
+
+	it("pushes local binary file to remote", async () => {
+		await ensureSyncEngine();
+
+		await writeBinaryFile("local-image.png", FAKE_PNG);
+		await injectMocks([]);
+
+		const result = await runSync();
+
+		expect(result.push).not.toBeNull();
+		expect(result.push.pushed).toContain("local-image.png");
+
+		const gql = await getGraphqlState();
+		expect(gql.called).toBe(true);
+		const pushed = gql.lastArgs.additions.find((a: any) => a.path === "local-image.png");
+		expect(pushed).toBeDefined();
+		// Verify base64 content can be decoded back to original bytes
+		const decoded = atob(pushed.base64Content);
+		const decodedBytes = Array.from(decoded, (c: string) => c.charCodeAt(0));
+		expect(decodedBytes).toEqual(FAKE_PNG);
+	});
+
+	it("binary and text files sync together in same cycle", async () => {
+		await ensureSyncEngine();
+
+		const textContent = "# Hello";
+		const textSha = await computeGitBlobSha(textContent);
+		const binaryBase64 = bytesToBase64(FAKE_PNG);
+		const binarySha = await computeGitBlobShaFromBytes(FAKE_PNG);
+
+		// Remote has one text and one binary file
+		await injectMocks([
+			{ path: "readme.md", sha: textSha, content: textContent, size: textContent.length },
+			{ path: "logo.png", sha: binarySha, content: "", size: FAKE_PNG.length, base64Content: binaryBase64 },
+		]);
+
+		const result = await runSync();
+
+		expect(result.pull.created).toContain("readme.md");
+		expect(result.pull.created).toContain("logo.png");
+		expect(result.pull.errors).toHaveLength(0);
+
+		const text = await obsidianPage.read("readme.md");
+		expect(text).toBe(textContent);
+
+		const binary = await readBinaryFile("logo.png");
+		expect(binary).toEqual(FAKE_PNG);
+	});
+
+	it("cache marks binary files with isBinary flag", async () => {
+		await ensureSyncEngine();
+
+		const binaryBase64 = bytesToBase64(FAKE_PNG);
+		const binarySha = await computeGitBlobShaFromBytes(FAKE_PNG);
+
+		await injectMocks([
+			{ path: "photo.png", sha: binarySha, content: "", size: FAKE_PNG.length, base64Content: binaryBase64 },
+		]);
+
+		await runSync();
+
+		const state = await getSyncState();
+		expect(state.cache["photo.png"]).toBeDefined();
+		expect(state.cache["photo.png"].isBinary).toBe(true);
 	});
 });

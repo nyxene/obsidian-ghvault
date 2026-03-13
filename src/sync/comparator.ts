@@ -5,6 +5,7 @@ export interface LocalFileInfo {
 	path: string;
 	contentHash: string;
 	size: number;
+	isBinary?: boolean;
 }
 
 /**
