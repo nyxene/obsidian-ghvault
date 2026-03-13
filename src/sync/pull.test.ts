@@ -570,6 +570,47 @@ describe("PullEngine", () => {
 		});
 	});
 
+	describe("rate limit mid-download", () => {
+		it("collects rate limit error for one file while writing the other", async () => {
+			const client = createMockClient([
+				{ path: "ok.md", sha: "sha-ok" },
+				{ path: "limited.md", sha: "sha-limited" },
+			]);
+			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
+				if (path === "limited.md") {
+					return Promise.reject(
+						new (class extends Error {
+							readonly resetAt = new Date();
+							constructor() {
+								super("GitHub rate limit exceeded. Resets at 2026-01-01T00:00:00.000Z");
+								this.name = "GitHubRateLimitError";
+							}
+						})(),
+					);
+				}
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-ok");
+				return Promise.resolve({ content: btoa("ok content"), sha: "sha-ok", size: 10 });
+			});
+			const state = createMockState({});
+			const vault = createMockVault();
+			const logger = createMockLogger();
+			const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+			const result = await engine.pull("main");
+
+			expect(result.created).toEqual(["ok.md"]);
+			expect(vault.writeFile).toHaveBeenCalledWith("ok.md", "ok content");
+			expect(result.errors).toEqual([
+				expect.objectContaining({
+					path: "limited.md",
+					error: expect.stringContaining("rate limit"),
+				}),
+			]);
+			expect(state.setHeadOid).toHaveBeenCalledWith("head-sha");
+			expect(state.save).toHaveBeenCalled();
+		});
+	});
+
 	describe("delete error handling", () => {
 		it("collects error when deleteFile throws and continues other deletes", async () => {
 			const client = createMockClient([]);

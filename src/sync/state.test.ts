@@ -57,6 +57,59 @@ describe("SyncStateManager", () => {
 			expect(manager.getSHA("file.md")).toEqual(sampleEntry);
 		});
 
+		it("preserves valid entries and discards invalid ones in partially corrupted cache", async () => {
+			const validEntry = {
+				remoteSha: "abc123",
+				localContentHash: "def456",
+				lastSyncedAt: 1000,
+				size: 42,
+				isBinary: false,
+			};
+			const storage = createMockStorage({
+				syncState: {
+					lastRemoteHeadSha: "a".repeat(40),
+					lastSyncedAt: 5000,
+					cache: {
+						"valid.md": validEntry,
+						"missing-sha.md": { localContentHash: "h", lastSyncedAt: 1, size: 1, isBinary: false },
+						"missing-hash.md": { remoteSha: "s", lastSyncedAt: 1, size: 1, isBinary: false },
+						"missing-time.md": { remoteSha: "s", localContentHash: "h", size: 1, isBinary: false },
+						"missing-size.md": {
+							remoteSha: "s",
+							localContentHash: "h",
+							lastSyncedAt: 1,
+							isBinary: false,
+						},
+						"missing-binary.md": {
+							remoteSha: "s",
+							localContentHash: "h",
+							lastSyncedAt: 1,
+							size: 1,
+						},
+						"null-entry.md": null,
+						"string-entry.md": "not an object",
+						"number-entry.md": 42,
+					},
+				},
+			});
+			const manager = new SyncStateManager(storage);
+
+			await manager.load();
+
+			expect(manager.getSHA("valid.md")).toEqual(validEntry);
+			expect(manager.getSHA("missing-sha.md")).toBeUndefined();
+			expect(manager.getSHA("missing-hash.md")).toBeUndefined();
+			expect(manager.getSHA("missing-time.md")).toBeUndefined();
+			expect(manager.getSHA("missing-size.md")).toBeUndefined();
+			expect(manager.getSHA("missing-binary.md")).toBeUndefined();
+			expect(manager.getSHA("null-entry.md")).toBeUndefined();
+			expect(manager.getSHA("string-entry.md")).toBeUndefined();
+			expect(manager.getSHA("number-entry.md")).toBeUndefined();
+			// Valid metadata preserved
+			expect(manager.getHeadOid()).toBe("a".repeat(40));
+			expect(manager.getLastSyncedAt()).toBe(5000);
+		});
+
 		it("handles corrupted data gracefully", async () => {
 			const storage = createMockStorage({ syncState: "not-an-object" });
 			const manager = new SyncStateManager(storage);
