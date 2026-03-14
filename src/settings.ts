@@ -47,6 +47,22 @@ function syncFolderDesc(rawValue: string): string {
 	return `Will sync: ${validation.sanitized}/`;
 }
 
+function debounceDesc(current: number, rawInput?: string): string {
+	if (rawInput !== undefined) {
+		const num = Number.parseInt(rawInput, 10);
+		if (rawInput === "" || Number.isNaN(num)) {
+			return `⚠ Enter 1–300. Active: ${current}s`;
+		}
+		if (num < 1) {
+			return `⚠ Min 1s. Active: ${current}s`;
+		}
+		if (num > 300) {
+			return `⚠ Max 300s. Active: ${current}s`;
+		}
+	}
+	return `Seconds to wait after last change (1–300)`;
+}
+
 export interface SettingTabCallbacks {
 	onSave: (settings: GHVaultSettings) => Promise<void>;
 	onTestConnection: () => Promise<void>;
@@ -176,6 +192,39 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					}
 					button.setDisabled(false);
 					setTimeout(() => button.setButtonText("Test"), 3000);
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Auto-sync")
+			.setDesc("Automatically sync when files change in the vault")
+			.addToggle((toggle) =>
+				toggle.setValue(this.settings.autoSync).onChange(async (value) => {
+					this.settings.autoSync = value;
+					await this.callbacks.onSave(this.settings);
+				}),
+			);
+
+		const debounceSetting = new Setting(containerEl)
+			.setName("Auto-sync debounce")
+			.setDesc(debounceDesc(this.settings.autoSyncDebounce))
+			.addText((text) => {
+				text
+					.setPlaceholder("10")
+					.setValue(String(this.settings.autoSyncDebounce))
+					.onChange(async (value) => {
+						const num = Number.parseInt(value, 10);
+						if (Number.isNaN(num) || num < 1 || num > 300) {
+							debounceSetting.setDesc(debounceDesc(this.settings.autoSyncDebounce, value));
+							return;
+						}
+						this.settings.autoSyncDebounce = num;
+						debounceSetting.setDesc(debounceDesc(num));
+						await this.callbacks.onSave(this.settings);
+					});
+				text.inputEl.addEventListener("blur", () => {
+					text.setValue(String(this.settings.autoSyncDebounce));
+					debounceSetting.setDesc(debounceDesc(this.settings.autoSyncDebounce));
 				});
 			});
 

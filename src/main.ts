@@ -1,8 +1,9 @@
-import { Notice, Plugin } from "obsidian";
+import { type EventRef, Notice, Plugin, TFile } from "obsidian";
 import { GitHubClient } from "./github/client";
 import { GitHubGraphQL } from "./github/graphql";
 import { RateLimiter } from "./github/rate-limit";
 import { GHVaultSettingTab, sanitizeBranch, sanitizeSlug, sanitizeSyncFolder } from "./settings";
+import { ChangeQueue } from "./sync/change-queue";
 import { SyncEngine } from "./sync/engine";
 import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
@@ -20,6 +21,8 @@ export default class GHVaultPlugin extends Plugin {
 	private statusBarEl: HTMLElement | null = null;
 	private logger: Logger | null = null;
 	private lastSyncAt = 0;
+	private changeQueue: ChangeQueue | null = null;
+	private eventRefs: EventRef[] = [];
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -38,6 +41,7 @@ export default class GHVaultPlugin extends Plugin {
 						await this.clearSyncState();
 					}
 					this.rebuildSyncEngine();
+					this.setupAutoSync();
 				},
 				onTestConnection: () => this.testConnection(),
 			}),
@@ -59,9 +63,11 @@ export default class GHVaultPlugin extends Plugin {
 		this.setStatus("idle");
 
 		this.rebuildSyncEngine();
+		this.setupAutoSync();
 	}
 
 	async onunload(): Promise<void> {
+		this.teardownAutoSync();
 		this.syncEngine = null;
 		this.statusBarEl = null;
 		this.logger = null;
@@ -148,24 +154,25 @@ export default class GHVaultPlugin extends Plugin {
 		}
 	}
 
-	private async runSync(): Promise<void> {
+	private async runSync(silent = false): Promise<void> {
 		if (!this.syncEngine) {
-			new Notice("GHVault: Configure settings first (token, owner, repo)");
+			if (!silent) new Notice("GHVault: Configure settings first (token, owner, repo)");
 			return;
 		}
 
 		if (this.syncEngine.isSyncing) {
-			new Notice("GHVault: Sync already in progress");
+			if (!silent) new Notice("GHVault: Sync already in progress");
 			return;
 		}
 
 		const now = Date.now();
 		if (now - this.lastSyncAt < GHVaultPlugin.SYNC_COOLDOWN_MS) {
-			new Notice("GHVault: Please wait before syncing again");
+			if (!silent) new Notice("GHVault: Please wait before syncing again");
 			return;
 		}
 		this.lastSyncAt = now;
 
+		this.changeQueue?.pause();
 		this.setStatus("syncing...");
 		try {
 			const result = await this.syncEngine.sync();
@@ -174,7 +181,7 @@ export default class GHVaultPlugin extends Plugin {
 			const pushCount = (result.push?.pushed.length ?? 0) + (result.push?.deleted.length ?? 0);
 
 			if (pullCount === 0 && pushCount === 0) {
-				new Notice("GHVault: Already up to date");
+				if (!silent) new Notice("GHVault: Already up to date");
 			} else {
 				new Notice(`GHVault: Synced — ${pullCount} pulled, ${pushCount} pushed`);
 			}
@@ -185,7 +192,51 @@ export default class GHVaultPlugin extends Plugin {
 			this.logger?.error("Sync failed", { error: message });
 			new Notice(`GHVault: Sync failed — ${sanitizeErrorForUI(message)}`);
 			this.setStatus("error");
+		} finally {
+			this.changeQueue?.resume();
 		}
+	}
+
+	private setupAutoSync(): void {
+		this.teardownAutoSync();
+
+		if (!this.settings.autoSync || !this.syncEngine) return;
+
+		this.changeQueue = new ChangeQueue({
+			debounceMs: this.settings.autoSyncDebounce * 1000,
+			onReady: () => {
+				this.runSync(true);
+			},
+		});
+
+		this.eventRefs = [
+			this.app.vault.on("create", (file) => {
+				if (file instanceof TFile) this.changeQueue?.push(file.path, "create");
+			}),
+			this.app.vault.on("modify", (file) => {
+				if (file instanceof TFile) this.changeQueue?.push(file.path, "modify");
+			}),
+			this.app.vault.on("delete", (file) => {
+				if (file instanceof TFile) this.changeQueue?.push(file.path, "delete");
+			}),
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (file instanceof TFile) {
+					this.changeQueue?.push(oldPath, "delete");
+					this.changeQueue?.push(file.path, "create");
+				}
+			}),
+		];
+
+		this.logger?.info("Auto-sync enabled", { debounce: this.settings.autoSyncDebounce });
+	}
+
+	private teardownAutoSync(): void {
+		for (const ref of this.eventRefs) {
+			this.app.vault.offref(ref);
+		}
+		this.eventRefs = [];
+		this.changeQueue?.destroy();
+		this.changeQueue = null;
 	}
 
 	private setStatus(status: string): void {
@@ -203,6 +254,13 @@ export default class GHVaultPlugin extends Plugin {
 			const repo = typeof raw.repo === "string" ? raw.repo : "";
 			const branch = typeof raw.branch === "string" ? raw.branch : DEFAULT_SETTINGS.branch;
 			const folder = typeof raw.syncFolder === "string" ? raw.syncFolder : "";
+			const autoSync = typeof raw.autoSync === "boolean" ? raw.autoSync : DEFAULT_SETTINGS.autoSync;
+			const autoSyncDebounce =
+				typeof raw.autoSyncDebounce === "number" &&
+				raw.autoSyncDebounce >= 1 &&
+				raw.autoSyncDebounce <= 300
+					? raw.autoSyncDebounce
+					: DEFAULT_SETTINGS.autoSyncDebounce;
 			this.settings = {
 				githubToken: token,
 				owner: sanitizeSlug(owner),
@@ -212,6 +270,8 @@ export default class GHVaultPlugin extends Plugin {
 				logLevel: VALID_LOG_LEVELS.includes(raw.logLevel as LogLevel)
 					? (raw.logLevel as LogLevel)
 					: DEFAULT_SETTINGS.logLevel,
+				autoSync,
+				autoSyncDebounce,
 			};
 		}
 	}

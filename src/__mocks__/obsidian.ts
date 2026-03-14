@@ -23,9 +23,13 @@ interface FakeEl {
 	setText(text: string): void;
 	querySelector(selector: string): FakeEl | null;
 	appendChild(child: FakeEl): void;
+	addEventListener(event: string, handler: () => void): void;
+	/** Test helper: trigger a DOM event */
+	simulateEvent(event: string): void;
 }
 
 function createFakeEl(tag: string): FakeEl {
+	const eventHandlers = new Map<string, Array<() => void>>();
 	const el: FakeEl = {
 		tagName: tag.toUpperCase(),
 		className: "",
@@ -60,6 +64,16 @@ function createFakeEl(tag: string): FakeEl {
 		},
 		appendChild(child: FakeEl) {
 			this.children.push(child);
+		},
+		addEventListener(event: string, handler: () => void) {
+			const handlers = eventHandlers.get(event) ?? [];
+			handlers.push(handler);
+			eventHandlers.set(event, handlers);
+		},
+		simulateEvent(event: string) {
+			for (const handler of eventHandlers.get(event) ?? []) {
+				handler();
+			}
 		},
 	};
 	return el;
@@ -168,6 +182,26 @@ export class DropdownComponent {
 	}
 }
 
+export class ToggleComponent {
+	private _value = false;
+	private _onChange?: (value: boolean) => void | Promise<void>;
+
+	setValue(value: boolean): this {
+		this._value = value;
+		return this;
+	}
+	getValue(): boolean {
+		return this._value;
+	}
+	onChange(cb: (value: boolean) => void | Promise<void>): this {
+		this._onChange = cb;
+		return this;
+	}
+	async simulateChange(value: boolean): Promise<void> {
+		await this._onChange?.(value);
+	}
+}
+
 export class ButtonComponent {
 	private _text = "";
 	private _disabled = false;
@@ -210,6 +244,7 @@ export class Setting {
 	private _desc = "";
 	textComponents: TextComponent[] = [];
 	dropdownComponents: DropdownComponent[] = [];
+	toggleComponents: ToggleComponent[] = [];
 	buttonComponents: ButtonComponent[] = [];
 
 	constructor(_containerEl: unknown) {
@@ -242,7 +277,10 @@ export class Setting {
 		this.dropdownComponents.push(dropdown);
 		return this;
 	}
-	addToggle(_cb: unknown): this {
+	addToggle(cb: (toggle: ToggleComponent) => unknown): this {
+		const toggle = new ToggleComponent();
+		cb(toggle);
+		this.toggleComponents.push(toggle);
 		return this;
 	}
 	addButton(cb: (button: ButtonComponent) => void): this {
@@ -250,6 +288,38 @@ export class Setting {
 		cb(button);
 		this.buttonComponents.push(button);
 		return this;
+	}
+}
+
+export interface EventRef {
+	id: number;
+}
+
+export class Vault {
+	private _listeners = new Map<number, { event: string; cb: (...args: unknown[]) => void }>();
+	private _nextId = 1;
+
+	on(event: string, cb: (...args: unknown[]) => void): EventRef {
+		const id = this._nextId++;
+		this._listeners.set(id, { event, cb });
+		return { id };
+	}
+
+	offref(ref: EventRef): void {
+		this._listeners.delete(ref.id);
+	}
+
+	/** Test helper: trigger a vault event */
+	trigger(event: string, ...args: unknown[]): void {
+		for (const listener of this._listeners.values()) {
+			if (listener.event === event) {
+				listener.cb(...args);
+			}
+		}
+	}
+
+	getListenerCount(): number {
+		return this._listeners.size;
 	}
 }
 

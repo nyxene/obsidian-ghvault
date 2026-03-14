@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import type { GitHubGraphQL } from "../github/graphql";
 import type { SHACacheEntry } from "../types";
 import { computeGitBlobSha, computeHash, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
+import { ChangeQueue } from "./change-queue";
 import type { LocalFileInfo } from "./comparator";
 import type { SyncVault } from "./engine";
 import { SyncEngine } from "./engine";
@@ -764,5 +765,130 @@ describe("Sync integration", () => {
 			);
 			expect(vault.files.get("ok.md")).toBe("ok content");
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Auto-sync E2E — real ChangeQueue + SyncEngine wired together
+// ---------------------------------------------------------------------------
+
+describe("Auto-sync E2E", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function createAutoSyncSetup(options?: {
+		remoteFiles?: MockRemoteFile[];
+		localFiles?: MockVaultFile[];
+		debounceMs?: number;
+	}) {
+		const setup = createIntegrationSetup({
+			localFiles: options?.localFiles ?? [],
+			remoteFiles: options?.remoteFiles ?? [],
+		});
+
+		const syncSpy = vi.spyOn(setup.engine, "sync");
+
+		const queue = new ChangeQueue({
+			debounceMs: options?.debounceMs ?? 1000,
+			onReady: () => {
+				setup.engine.sync();
+			},
+		});
+
+		return { ...setup, queue, syncSpy };
+	}
+
+	it("vault file change triggers sync after debounce", () => {
+		const { queue, syncSpy } = createAutoSyncSetup();
+
+		queue.push("note.md", "modify");
+		expect(syncSpy).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("multiple rapid changes debounce into single sync", () => {
+		const { queue, syncSpy } = createAutoSyncSetup({ debounceMs: 500 });
+
+		queue.push("a.md", "create");
+		vi.advanceTimersByTime(200);
+		queue.push("b.md", "modify");
+		vi.advanceTimersByTime(200);
+		queue.push("c.md", "delete");
+		vi.advanceTimersByTime(200);
+
+		// 600ms since last push, but only 200ms since last change
+		expect(syncSpy).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(300);
+		expect(syncSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("rename (delete old + create new) triggers single sync", () => {
+		const { queue, syncSpy } = createAutoSyncSetup();
+
+		// Simulate rename event as main.ts does it
+		queue.push("old-name.md", "delete");
+		queue.push("new-name.md", "create");
+
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("excluded paths do not trigger sync", () => {
+		const { queue, syncSpy } = createAutoSyncSetup();
+
+		queue.push(".obsidian/workspace.json", "modify");
+		queue.push(".trash/deleted.md", "delete");
+		queue.push("ghvault.log", "modify");
+
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).not.toHaveBeenCalled();
+	});
+
+	it("pause prevents sync, resume triggers sync for collected events", () => {
+		const { queue, syncSpy } = createAutoSyncSetup();
+
+		queue.push("note.md", "modify");
+		vi.advanceTimersByTime(500);
+
+		queue.pause();
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).not.toHaveBeenCalled();
+
+		// Events during pause are collected
+		queue.push("edited-during-sync.md", "modify");
+
+		queue.resume();
+		// Resume starts debounce for collected events
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("create + delete cancels out and does not trigger sync", () => {
+		const { queue, syncSpy } = createAutoSyncSetup();
+
+		queue.push("temp.md", "create");
+		queue.push("temp.md", "delete");
+
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).not.toHaveBeenCalled();
+	});
+
+	it("destroy stops pending sync", () => {
+		const { queue, syncSpy } = createAutoSyncSetup();
+
+		queue.push("note.md", "modify");
+		vi.advanceTimersByTime(500);
+
+		queue.destroy();
+		vi.advanceTimersByTime(1000);
+		expect(syncSpy).not.toHaveBeenCalled();
 	});
 });

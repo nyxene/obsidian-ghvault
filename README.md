@@ -25,6 +25,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 ## Features
 
 - **Push & Pull** — sync changes in both directions between your vault and a GitHub repo
+- **Auto-sync** — automatically syncs when files change in the vault, with configurable debounce (1–300 seconds)
 - **Mobile-first** — works on iOS, Android, and desktop equally
 - **No git CLI** — uses GitHub REST API for reads and GraphQL `createCommitOnBranch` for writes
 - **Conflict detection** — files changed on both sides are skipped (not overwritten) and reported
@@ -79,13 +80,17 @@ Open Obsidian Settings → GHVault and fill in:
 | **Repository** | Repository name |
 | **Branch** | Branch to sync with (default: `main`) |
 | **Sync Folder** | Subfolder in the repo to sync (leave empty for entire repo) |
+| **Auto-sync** | Automatically sync when vault files change (default: off) |
+| **Auto-sync debounce** | Seconds to wait after last change before syncing (1–300, default: 10) |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
 
 Use the **Test Connection** button to verify your settings before syncing.
 
 ### 3. Sync
 
-Click the GHVault icon in the ribbon or run the **GHVault: Sync now** command from the command palette. The status bar shows the current state:
+Click the GHVault icon in the ribbon or run the **GHVault: Sync now** command from the command palette. Enable **Auto-sync** to sync automatically when you create, edit, delete, or rename files — the plugin waits for the debounce period after your last change before syncing.
+
+The status bar shows the current state:
 
 ![GHVault: idle](docs/screenshots/vault-idle.png) ![GHVault: syncing...](docs/screenshots/vault-syncing.png)
 
@@ -134,7 +139,7 @@ When the same file is changed both locally and on GitHub between syncs, GHVault 
 - **No merge** — conflicting files are skipped, not merged. You need to resolve conflicts manually by choosing one version.
 - **API rate limits** — GitHub allows 5,000 REST requests/hour and 5,000 GraphQL points/hour. Large vaults with thousands of files may hit limits during initial sync.
 - **Single branch** — syncs with one branch at a time. No multi-branch workflows.
-- **No real-time sync** — sync is manual (ribbon click or command). No auto-sync on file change yet.
+- **No real-time sync** — auto-sync reacts to file changes but does not poll for remote updates. Remote changes are only fetched during sync.
 
 ## Security
 
@@ -197,6 +202,7 @@ src/
     pull.ts                # Pull engine (remote → local)
     push.ts                # Push engine (local → remote)
     comparator.ts          # Local/remote diff computation
+    change-queue.ts        # Debounced event queue for auto-sync
     state.ts               # SHA cache + sync state
     vault-adapter.ts       # Obsidian Vault API adapter
   utils/
