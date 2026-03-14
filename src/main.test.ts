@@ -30,10 +30,12 @@ vi.mock("obsidian", async (importOriginal) => {
 // ---------------------------------------------------------------------------
 
 const mockGetRepoInfo = vi.fn();
+const mockGetRef = vi.fn();
 
 vi.mock("./github/client", () => ({
 	GitHubClient: class MockGitHubClient {
 		getRepoInfo = mockGetRepoInfo;
+		getRef = mockGetRef;
 	},
 }));
 
@@ -42,7 +44,9 @@ vi.mock("./github/graphql", () => ({
 }));
 
 vi.mock("./github/rate-limit", () => ({
-	RateLimiter: class MockRateLimiter {},
+	RateLimiter: class MockRateLimiter {
+		canMakeRequest = vi.fn().mockReturnValue(true);
+	},
 }));
 
 const mockSync = vi.fn().mockResolvedValue({
@@ -71,11 +75,13 @@ vi.mock("./sync/push", () => ({
 
 const mockStateClear = vi.fn();
 const mockStateSave = vi.fn().mockResolvedValue(undefined);
+const mockGetHeadOid = vi.fn().mockReturnValue("");
 
 vi.mock("./sync/state", () => ({
 	SyncStateManager: class MockSyncStateManager {
 		clear = mockStateClear;
 		save = mockStateSave;
+		getHeadOid = mockGetHeadOid;
 	},
 }));
 
@@ -173,7 +179,11 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	const plugin = new PluginClass();
 
 	const vault = new Vault();
-	plugin.loadData = vi.fn().mockResolvedValue(loadDataResult);
+	plugin.loadData = vi
+		.fn()
+		.mockImplementation(() =>
+			Promise.resolve(loadDataResult ? JSON.parse(JSON.stringify(loadDataResult)) : null),
+		);
 	plugin.saveData = vi.fn().mockResolvedValue(undefined);
 	plugin.app = { vault } as AnyPlugin;
 
@@ -281,6 +291,7 @@ describe("sanitizeErrorForUI (exported)", () => {
 
 describe("GHVaultPlugin", () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 		noticeLog.length = 0;
 		mockSync.mockReset().mockResolvedValue({
@@ -289,8 +300,10 @@ describe("GHVaultPlugin", () => {
 		});
 		mockIsSyncing = false;
 		mockGetRepoInfo.mockReset();
+		mockGetRef.mockReset();
 		mockStateClear.mockClear();
 		mockStateSave.mockClear();
+		mockGetHeadOid.mockReset().mockReturnValue("");
 		capturedSettingCallbacks = {};
 		capturedChangeQueueOnReady = null;
 		mockChangeQueuePause.mockClear();
@@ -773,6 +786,180 @@ describe("GHVaultPlugin", () => {
 				settings: { autoSyncDebounce: "fast" },
 			});
 			expect(plugin.settings.autoSyncDebounce).toBe(DEFAULT_SETTINGS.autoSyncDebounce);
+		});
+
+		it("loadSettings parses autoSyncPullInterval within range", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncPullInterval: 120 },
+			});
+			expect(plugin.settings.autoSyncPullInterval).toBe(120);
+		});
+
+		it("loadSettings defaults autoSyncPullInterval for out-of-range values", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncPullInterval: 5 },
+			});
+			expect(plugin.settings.autoSyncPullInterval).toBe(DEFAULT_SETTINGS.autoSyncPullInterval);
+		});
+
+		it("loadSettings defaults autoSyncPullInterval for value above max", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncPullInterval: 9999 },
+			});
+			expect(plugin.settings.autoSyncPullInterval).toBe(DEFAULT_SETTINGS.autoSyncPullInterval);
+		});
+
+		it("loadSettings defaults autoSyncPullInterval for non-number", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncPullInterval: "slow" },
+			});
+			expect(plugin.settings.autoSyncPullInterval).toBe(DEFAULT_SETTINGS.autoSyncPullInterval);
+		});
+	});
+
+	describe("periodic pull check", () => {
+		const PULL_CHECK_SETTINGS = {
+			settings: {
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				autoSync: true,
+				autoSyncDebounce: 10,
+				autoSyncPullInterval: 60,
+			},
+		};
+
+		const REMOTE_SHA = "a".repeat(40);
+		const LOCAL_SHA = "b".repeat(40);
+
+		it("schedules pull check timer when autoSync is enabled", async () => {
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			expect(plugin.pullCheckTimeout).not.toBeNull();
+			expect(plugin.pullCheckCurrentInterval).toBe(60_000);
+		});
+
+		it("tears down pull check when autoSync is turned off", async () => {
+			const { plugin, onSave } = await loadPlugin(PULL_CHECK_SETTINGS);
+			expect(plugin.pullCheckCurrentInterval).toBeGreaterThan(0);
+
+			await onSave({
+				...PULL_CHECK_SETTINGS.settings,
+				autoSync: false,
+			});
+			expect(plugin.pullCheckCurrentInterval).toBe(0);
+			expect(plugin.pullCheckTimeout).toBeNull();
+		});
+
+		it("triggers sync when remote SHA differs from local", async () => {
+			mockGetRef.mockResolvedValue({ ref: "refs/heads/main", sha: REMOTE_SHA });
+			mockGetHeadOid.mockReturnValue(LOCAL_SHA);
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			await plugin.pullCheckTick();
+
+			expect(mockGetRef).toHaveBeenCalledWith("main");
+			expect(mockSync).toHaveBeenCalled();
+		});
+
+		it("does not trigger sync when remote SHA matches local", async () => {
+			mockGetRef.mockResolvedValue({ ref: "refs/heads/main", sha: REMOTE_SHA });
+			mockGetHeadOid.mockReturnValue(REMOTE_SHA);
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			await plugin.pullCheckTick();
+
+			expect(mockGetRef).toHaveBeenCalled();
+			expect(mockSync).not.toHaveBeenCalled();
+		});
+
+		it("skips pull check when headOid is empty (no initial sync)", async () => {
+			mockGetRef.mockResolvedValue({ ref: "refs/heads/main", sha: REMOTE_SHA });
+			mockGetHeadOid.mockReturnValue("");
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			await plugin.pullCheckTick();
+
+			expect(mockGetRef).toHaveBeenCalled();
+			expect(mockSync).not.toHaveBeenCalled();
+		});
+
+		it("skips pull check when sync is in progress", async () => {
+			mockIsSyncing = true;
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			await plugin.pullCheckTick();
+
+			expect(mockGetRef).not.toHaveBeenCalled();
+		});
+
+		it("backs off interval when no remote changes", async () => {
+			mockGetRef.mockResolvedValue({ ref: "refs/heads/main", sha: REMOTE_SHA });
+			mockGetHeadOid.mockReturnValue(REMOTE_SHA);
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+
+			await plugin.pullCheckTick();
+			expect(mockGetRef).toHaveBeenCalledTimes(1);
+			expect(plugin.pullCheckCurrentInterval).toBe(120_000);
+
+			await plugin.pullCheckTick();
+			expect(mockGetRef).toHaveBeenCalledTimes(2);
+			expect(plugin.pullCheckCurrentInterval).toBe(240_000);
+		});
+
+		it("caps backoff at 8x base interval", async () => {
+			mockGetRef.mockResolvedValue({ ref: "refs/heads/main", sha: REMOTE_SHA });
+			mockGetHeadOid.mockReturnValue(REMOTE_SHA);
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			const maxMs = 60_000 * 8;
+
+			// Tick 4 times: 60k -> 120k -> 240k -> 480k (capped at 480k)
+			await plugin.pullCheckTick();
+			await plugin.pullCheckTick();
+			await plugin.pullCheckTick();
+			expect(plugin.pullCheckCurrentInterval).toBe(maxMs);
+
+			await plugin.pullCheckTick();
+			expect(plugin.pullCheckCurrentInterval).toBe(maxMs);
+		});
+
+		it("resets interval to base when remote changes detected", async () => {
+			mockGetRef.mockResolvedValueOnce({ ref: "refs/heads/main", sha: REMOTE_SHA });
+			mockGetHeadOid.mockReturnValue(REMOTE_SHA);
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+
+			await plugin.pullCheckTick();
+			expect(plugin.pullCheckCurrentInterval).toBe(120_000);
+
+			// Now remote SHA differs from local — should reset to base
+			mockGetRef.mockResolvedValueOnce({ ref: "refs/heads/main", sha: LOCAL_SHA });
+
+			await plugin.pullCheckTick();
+			expect(plugin.pullCheckCurrentInterval).toBe(60_000);
+		});
+
+		it("backs off on network error without showing notice", async () => {
+			mockGetRef.mockRejectedValue(new Error("Network error"));
+
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			noticeLog.length = 0;
+
+			await plugin.pullCheckTick();
+
+			expect(plugin.pullCheckCurrentInterval).toBe(120_000);
+			const errorNotices = noticeLog.filter((n) => n.message.includes("Network error"));
+			expect(errorNotices).toHaveLength(0);
+		});
+
+		it("clears pull check timer on onunload", async () => {
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			expect(plugin.pullCheckTimeout).not.toBeNull();
+
+			await plugin.onunload();
+			expect(plugin.pullCheckTimeout).toBeNull();
 		});
 	});
 

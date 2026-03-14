@@ -26,6 +26,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 
 - **Push & Pull** — sync changes in both directions between your vault and a GitHub repo
 - **Auto-sync** — automatically syncs when files change in the vault, with configurable debounce (1–300 seconds)
+- **Remote pull check** — periodically checks for remote changes and pulls them automatically, with adaptive backoff when idle
 - **Mobile-first** — works on iOS, Android, and desktop equally
 - **No git CLI** — uses GitHub REST API for reads and GraphQL `createCommitOnBranch` for writes
 - **Conflict detection** — files changed on both sides are skipped (not overwritten) and reported
@@ -82,6 +83,7 @@ Open Obsidian Settings → GHVault and fill in:
 | **Sync Folder** | Subfolder in the repo to sync (leave empty for entire repo) |
 | **Auto-sync** | Automatically sync when vault files change (default: off) |
 | **Auto-sync debounce** | Seconds to wait after last change before syncing (1–300, default: 10) |
+| **Remote pull interval** | Base interval in seconds to check for remote changes (30–3600, default: 300). Backs off automatically when idle. |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
 
 Use the **Test Connection** button to verify your settings before syncing.
@@ -139,7 +141,7 @@ When the same file is changed both locally and on GitHub between syncs, GHVault 
 - **No merge** — conflicting files are skipped, not merged. You need to resolve conflicts manually by choosing one version.
 - **API rate limits** — GitHub allows 5,000 REST requests/hour and 5,000 GraphQL points/hour. Large vaults with thousands of files may hit limits during initial sync.
 - **Single branch** — syncs with one branch at a time. No multi-branch workflows.
-- **No real-time sync** — auto-sync reacts to file changes but does not poll for remote updates. Remote changes are only fetched during sync.
+- **No real-time sync** — remote changes are detected via periodic polling (not webhooks/websockets). The default check interval is 5 minutes, with adaptive backoff when idle.
 
 ## Security
 

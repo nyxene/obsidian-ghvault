@@ -63,6 +63,22 @@ function debounceDesc(current: number, rawInput?: string): string {
 	return `Seconds to wait after last change (1–300)`;
 }
 
+function pullIntervalDesc(current: number, rawInput?: string): string {
+	if (rawInput !== undefined) {
+		const num = Number.parseInt(rawInput, 10);
+		if (rawInput === "" || Number.isNaN(num)) {
+			return `⚠ Enter 30–3600. Active: ${current}s`;
+		}
+		if (num < 30) {
+			return `⚠ Min 30s. Active: ${current}s`;
+		}
+		if (num > 3600) {
+			return `⚠ Max 3600s. Active: ${current}s`;
+		}
+	}
+	return `Base interval to check for remote changes (30–3600). Backs off when idle.`;
+}
+
 export interface SettingTabCallbacks {
 	onSave: (settings: GHVaultSettings) => Promise<void>;
 	onTestConnection: () => Promise<void>;
@@ -225,6 +241,31 @@ export class GHVaultSettingTab extends PluginSettingTab {
 				text.inputEl.addEventListener("blur", () => {
 					text.setValue(String(this.settings.autoSyncDebounce));
 					debounceSetting.setDesc(debounceDesc(this.settings.autoSyncDebounce));
+				});
+			});
+
+		const pullIntervalSetting = new Setting(containerEl)
+			.setName("Remote pull interval")
+			.setDesc(pullIntervalDesc(this.settings.autoSyncPullInterval))
+			.addText((text) => {
+				text
+					.setPlaceholder("300")
+					.setValue(String(this.settings.autoSyncPullInterval))
+					.onChange(async (value) => {
+						const num = Number.parseInt(value, 10);
+						if (Number.isNaN(num) || num < 30 || num > 3600) {
+							pullIntervalSetting.setDesc(
+								pullIntervalDesc(this.settings.autoSyncPullInterval, value),
+							);
+							return;
+						}
+						this.settings.autoSyncPullInterval = num;
+						pullIntervalSetting.setDesc(pullIntervalDesc(num));
+						await this.callbacks.onSave(this.settings);
+					});
+				text.inputEl.addEventListener("blur", () => {
+					text.setValue(String(this.settings.autoSyncPullInterval));
+					pullIntervalSetting.setDesc(pullIntervalDesc(this.settings.autoSyncPullInterval));
 				});
 			});
 

@@ -423,6 +423,92 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
+## Group P: Remote Pull Check
+
+### TC-RPULL-001: Pull interval setting renders
+**Priority:** P0
+**Platform:** Desktop
+**Steps:**
+1. Open GHVault settings
+**Expected:** "Remote pull interval" field visible with default value 300, description shows range (30–3600)
+
+### TC-RPULL-002: Pull interval setting validates input
+**Priority:** P1
+**Platform:** Desktop
+**Steps:**
+1. Set pull interval to "abc" → warning in description, value unchanged
+2. Set pull interval to "10" → warning "Min 30s", value unchanged
+3. Set pull interval to "9999" → warning "Max 3600s", value unchanged
+4. Click away (blur) → field restores to last saved value
+5. Set pull interval to "120" → saves, description shows range info
+**Expected:** All validations work as described, no data loss
+
+### TC-RPULL-003: Remote changes auto-detected
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, pull interval = 30s, initial sync complete
+**Steps:**
+1. Add a file to the repo via GitHub web UI
+2. Wait 30–60 seconds (do NOT manually sync)
+**Expected:** File appears in vault automatically, status bar flashes "syncing..." then returns to "idle"
+
+### TC-RPULL-004: No sync when remote unchanged
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, pull interval = 30s, vault and repo in sync
+**Steps:**
+1. Wait 2+ minutes without any changes
+2. Check log file (debug level)
+**Expected:** No sync triggered, log shows periodic ref checks without sync actions
+
+### TC-RPULL-005: Backoff when idle
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, pull interval = 60s, log level = debug
+**Steps:**
+1. Wait 5+ minutes without local or remote changes
+2. Check log for ref check intervals
+**Expected:** Intervals increase: ~60s, ~120s, ~240s, capping at ~480s (8× base)
+
+### TC-RPULL-006: Backoff resets on remote change
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, pull interval = 60s, log level = debug, idle for 5+ min (interval backed off)
+**Steps:**
+1. Add a file on GitHub via web UI
+2. Wait for pull check to detect and sync it
+3. Check log for next interval
+**Expected:** Interval resets to base (60s) after detecting remote change
+
+### TC-RPULL-007: Pull check skipped during active sync
+**Priority:** P2
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, pull interval = 30s
+**Steps:**
+1. Edit a local file to trigger auto-sync
+2. During sync (status = "syncing..."), observe pull check behavior in logs
+**Expected:** Pull check skipped while sync is in progress, resumes after
+
+### TC-RPULL-008: Pull check respects rate limits
+**Priority:** P2
+**Platform:** Both
+**Steps:**
+1. Exhaust REST rate limit (or simulate low remaining via many rapid syncs)
+2. Observe pull check behavior in debug logs
+**Expected:** Pull check skipped with "rate limit low" log message, no API call made
+
+### TC-RPULL-009: Disabling auto-sync stops pull check
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, pull check active
+**Steps:**
+1. Toggle auto-sync off in settings
+2. Add a file on GitHub
+3. Wait 2+ minutes
+**Expected:** No automatic sync, remote change not pulled until manual sync
+
+---
+
 ## Group L: Mobile-Specific
 
 ### TC-MOB-001: Settings tab renders on mobile

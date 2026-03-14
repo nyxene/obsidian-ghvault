@@ -257,12 +257,12 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates nine Setting instances", () => {
+		it("creates ten Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
 			// token, owner, repo, branch, sync folder, test connection,
-			// auto-sync, auto-sync debounce, log level
-			expect(getSettings()).toHaveLength(9);
+			// auto-sync, auto-sync debounce, remote pull interval, log level
+			expect(getSettings()).toHaveLength(10);
 		});
 
 		it("creates settings with expected names", () => {
@@ -277,6 +277,7 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Test connection");
 			expect(names).toContain("Auto-sync");
 			expect(names).toContain("Auto-sync debounce");
+			expect(names).toContain("Remote pull interval");
 			expect(names).toContain("Log level");
 		});
 
@@ -557,6 +558,68 @@ describe("GHVaultSettingTab", () => {
 			// Blur restores to last saved (60)
 			textComponent.inputEl.simulateEvent("blur");
 			expect(textComponent.getValue()).toBe("60");
+		});
+	});
+
+	describe("remote pull interval settings", () => {
+		it("renders Remote pull interval with current value", () => {
+			const { tab } = createTab({ autoSyncPullInterval: 120 });
+			tab.display();
+			const setting = findSettingByName("Remote pull interval");
+			expect(setting).toBeDefined();
+			expect(setting.textComponents[0].getValue()).toBe("120");
+		});
+
+		it("saves valid pull interval and updates description", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncPullInterval: 300 });
+			tab.display();
+			const setting = findSettingByName("Remote pull interval");
+			await setting.textComponents[0].simulateChange("60");
+			expect(settings.autoSyncPullInterval).toBe(60);
+			expect(callbacks.onSave).toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("30–3600");
+		});
+
+		it("shows warning for value below 30 without saving", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncPullInterval: 300 });
+			tab.display();
+			const setting = findSettingByName("Remote pull interval");
+			await setting.textComponents[0].simulateChange("10");
+			expect(settings.autoSyncPullInterval).toBe(300);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("Min 30s");
+		});
+
+		it("shows warning for value above 3600 without saving", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncPullInterval: 300 });
+			tab.display();
+			const setting = findSettingByName("Remote pull interval");
+			await setting.textComponents[0].simulateChange("9999");
+			expect(settings.autoSyncPullInterval).toBe(300);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("Max 3600s");
+		});
+
+		it("shows warning for non-numeric input without saving", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncPullInterval: 300 });
+			tab.display();
+			const setting = findSettingByName("Remote pull interval");
+			await setting.textComponents[0].simulateChange("abc");
+			expect(settings.autoSyncPullInterval).toBe(300);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("Enter 30–3600");
+		});
+
+		it("restores last saved value on blur", async () => {
+			const { tab } = createTab({ autoSyncPullInterval: 120 });
+			tab.display();
+			const setting = findSettingByName("Remote pull interval");
+			const textComponent = setting.textComponents[0];
+			await textComponent.simulateChange("abc");
+			expect(setting.getDesc()).toContain("Enter 30–3600");
+			textComponent.inputEl.simulateEvent("blur");
+			expect(textComponent.getValue()).toBe("120");
+			expect(setting.getDesc()).not.toContain("⚠");
 		});
 	});
 

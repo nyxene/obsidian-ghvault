@@ -15,14 +15,21 @@ import { Logger } from "./utils/logger";
 
 export default class GHVaultPlugin extends Plugin {
 	private static readonly SYNC_COOLDOWN_MS = 5000;
+	private static readonly PULL_CHECK_BACKOFF_MULTIPLIER = 2;
+	private static readonly PULL_CHECK_BACKOFF_CAP = 8;
 
 	private settings: GHVaultSettings = { ...DEFAULT_SETTINGS };
 	private syncEngine: SyncEngine | null = null;
+	private githubClient: GitHubClient | null = null;
+	private rateLimiter: RateLimiter | null = null;
+	private syncState: SyncStateManager | null = null;
 	private statusBarEl: HTMLElement | null = null;
 	private logger: Logger | null = null;
 	private lastSyncAt = 0;
 	private changeQueue: ChangeQueue | null = null;
 	private eventRefs: EventRef[] = [];
+	private pullCheckTimeout: ReturnType<typeof setTimeout> | null = null;
+	private pullCheckCurrentInterval = 0;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -69,6 +76,9 @@ export default class GHVaultPlugin extends Plugin {
 	async onunload(): Promise<void> {
 		this.teardownAutoSync();
 		this.syncEngine = null;
+		this.githubClient = null;
+		this.rateLimiter = null;
+		this.syncState = null;
 		this.statusBarEl = null;
 		this.logger = null;
 	}
@@ -77,6 +87,9 @@ export default class GHVaultPlugin extends Plugin {
 		const { githubToken, owner, repo, branch, syncFolder } = this.settings;
 		if (!githubToken || !owner || !repo) {
 			this.syncEngine = null;
+			this.githubClient = null;
+			this.rateLimiter = null;
+			this.syncState = null;
 			return;
 		}
 
@@ -128,6 +141,10 @@ export default class GHVaultPlugin extends Plugin {
 			logger,
 			commitOptions: { branch, owner, repo },
 		});
+
+		this.githubClient = client;
+		this.rateLimiter = rateLimiter;
+		this.syncState = state;
 	}
 
 	private async testConnection(): Promise<void> {
@@ -227,16 +244,96 @@ export default class GHVaultPlugin extends Plugin {
 			}),
 		];
 
-		this.logger?.info("Auto-sync enabled", { debounce: this.settings.autoSyncDebounce });
+		this.setupPullCheck();
+
+		this.logger?.info("Auto-sync enabled", {
+			debounce: this.settings.autoSyncDebounce,
+			pullInterval: this.settings.autoSyncPullInterval,
+		});
 	}
 
 	private teardownAutoSync(): void {
+		this.teardownPullCheck();
 		for (const ref of this.eventRefs) {
 			this.app.vault.offref(ref);
 		}
 		this.eventRefs = [];
 		this.changeQueue?.destroy();
 		this.changeQueue = null;
+	}
+
+	private setupPullCheck(): void {
+		this.teardownPullCheck();
+		const baseMs = this.settings.autoSyncPullInterval * 1000;
+		this.pullCheckCurrentInterval = baseMs;
+		this.schedulePullCheck();
+	}
+
+	private teardownPullCheck(): void {
+		if (this.pullCheckTimeout !== null) {
+			clearTimeout(this.pullCheckTimeout);
+			this.pullCheckTimeout = null;
+		}
+		this.pullCheckCurrentInterval = 0;
+	}
+
+	private schedulePullCheck(): void {
+		if (!this.pullCheckCurrentInterval || this.pullCheckCurrentInterval <= 0) return;
+		this.pullCheckTimeout = setTimeout(() => {
+			this.pullCheckTick();
+		}, this.pullCheckCurrentInterval);
+	}
+
+	private async pullCheckTick(): Promise<void> {
+		this.pullCheckTimeout = null;
+
+		if (!this.syncEngine || !this.githubClient || !this.rateLimiter || !this.syncState) {
+			return;
+		}
+
+		if (this.syncEngine.isSyncing) {
+			this.schedulePullCheck();
+			return;
+		}
+
+		if (!this.rateLimiter.canMakeRequest("rest")) {
+			this.logger?.debug("Pull check skipped: rate limit low");
+			this.schedulePullCheck();
+			return;
+		}
+
+		const baseMs = this.settings.autoSyncPullInterval * 1000;
+		const maxMs = baseMs * GHVaultPlugin.PULL_CHECK_BACKOFF_CAP;
+
+		try {
+			const ref = await this.githubClient.getRef(this.settings.branch);
+			const localHead = this.syncState.getHeadOid();
+
+			if (localHead && ref.sha !== localHead) {
+				this.logger?.info("Pull check: remote changed", {
+					local: localHead.slice(0, 8),
+					remote: ref.sha.slice(0, 8),
+				});
+				this.pullCheckCurrentInterval = baseMs;
+				await this.runSync(true);
+			} else {
+				this.pullCheckCurrentInterval = Math.min(
+					this.pullCheckCurrentInterval * GHVaultPlugin.PULL_CHECK_BACKOFF_MULTIPLIER,
+					maxMs,
+				);
+			}
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logger?.warn("Pull check failed", { error: message });
+			this.pullCheckCurrentInterval = Math.min(
+				this.pullCheckCurrentInterval * GHVaultPlugin.PULL_CHECK_BACKOFF_MULTIPLIER,
+				maxMs,
+			);
+		}
+
+		if (this.settings.autoSync && this.syncEngine) {
+			this.schedulePullCheck();
+		}
 	}
 
 	private setStatus(status: string): void {
@@ -261,6 +358,12 @@ export default class GHVaultPlugin extends Plugin {
 				raw.autoSyncDebounce <= 300
 					? raw.autoSyncDebounce
 					: DEFAULT_SETTINGS.autoSyncDebounce;
+			const autoSyncPullInterval =
+				typeof raw.autoSyncPullInterval === "number" &&
+				raw.autoSyncPullInterval >= 30 &&
+				raw.autoSyncPullInterval <= 3600
+					? raw.autoSyncPullInterval
+					: DEFAULT_SETTINGS.autoSyncPullInterval;
 			this.settings = {
 				githubToken: token,
 				owner: sanitizeSlug(owner),
@@ -272,6 +375,7 @@ export default class GHVaultPlugin extends Plugin {
 					: DEFAULT_SETTINGS.logLevel,
 				autoSync,
 				autoSyncDebounce,
+				autoSyncPullInterval,
 			};
 		}
 	}

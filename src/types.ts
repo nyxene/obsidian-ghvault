@@ -11,6 +11,7 @@ export interface GHVaultSettings {
 	logLevel: LogLevel;
 	autoSync: boolean;
 	autoSyncDebounce: number;
+	autoSyncPullInterval: number;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -158,4 +159,5 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	logLevel: "info",
 	autoSync: false,
 	autoSyncDebounce: 10,
+	autoSyncPullInterval: 300,
 };
