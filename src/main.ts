@@ -200,11 +200,16 @@ export default class GHVaultPlugin extends Plugin {
 			const pullCount =
 				result.pull.created.length + result.pull.modified.length + result.pull.deleted.length;
 			const pushCount = (result.push?.pushed.length ?? 0) + (result.push?.deleted.length ?? 0);
+			const conflictCount = result.conflicts.length;
 
-			if (pullCount === 0 && pushCount === 0) {
+			if (pullCount === 0 && pushCount === 0 && conflictCount === 0) {
 				if (!silent) new Notice("GHVault: Already up to date");
 			} else {
-				new Notice(`GHVault: Synced — ${pullCount} pulled, ${pushCount} pushed`);
+				const parts = [`${pullCount} pulled`, `${pushCount} pushed`];
+				if (conflictCount > 0) {
+					parts.push(`${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`);
+				}
+				new Notice(`GHVault: Synced — ${parts.join(", ")}`);
 			}
 
 			this.setStatus("idle");

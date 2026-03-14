@@ -52,6 +52,7 @@ vi.mock("./github/rate-limit", () => ({
 const mockSync = vi.fn().mockResolvedValue({
 	pull: { created: [], modified: [], deleted: [], errors: [] },
 	push: null,
+	conflicts: [],
 });
 
 let mockIsSyncing = false;
@@ -304,6 +305,7 @@ describe("GHVaultPlugin", () => {
 		mockSync.mockReset().mockResolvedValue({
 			pull: { created: [], modified: [], deleted: [], errors: [] },
 			push: null,
+			conflicts: [],
 		});
 		mockIsSyncing = false;
 		mockGetRepoInfo.mockReset();
@@ -537,6 +539,7 @@ describe("GHVaultPlugin", () => {
 			mockSync.mockResolvedValueOnce({
 				pull: { created: ["a.md"], modified: ["b.md"], deleted: [], errors: [] },
 				push: { pushed: ["c.md"], deleted: [] },
+				conflicts: [],
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -544,6 +547,37 @@ describe("GHVaultPlugin", () => {
 			await plugin.runSync();
 
 			expect(lastNotice().message).toBe("GHVault: Synced — 2 pulled, 1 pushed");
+		});
+
+		it("shows conflict count in notice when conflicts exist", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: ["a.md"], modified: [], deleted: [], errors: [] },
+				push: { pushed: ["b.md"], deleted: [] },
+				conflicts: [
+					{ path: "c.md", localChange: "modify", remoteChange: "modify" },
+					{ path: "d.md", localChange: "modify", remoteChange: "delete" },
+				],
+			});
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Synced — 1 pulled, 1 pushed, 2 conflicts");
+		});
+
+		it("shows 'Synced' with conflicts even when no files pulled or pushed", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: null,
+				conflicts: [{ path: "x.md", localChange: "modify", remoteChange: "modify" }],
+			});
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Synced — 0 pulled, 0 pushed, 1 conflict");
 		});
 	});
 
