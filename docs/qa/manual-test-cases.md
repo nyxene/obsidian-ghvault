@@ -509,6 +509,57 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
+## Group Q: Crash Recovery
+
+### TC-CRASH-001: Pending changes survive restart
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 30s
+**Steps:**
+1. Edit a file in vault
+2. Before debounce fires (within 30s), force-quit Obsidian
+3. Reopen Obsidian
+**Expected:** Plugin restores pending changes, triggers sync after debounce, file pushed to GitHub. Log shows "Restored pending changes from previous session"
+
+### TC-CRASH-002: No restore when autoSync is disabled
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync disabled
+**Steps:**
+1. Manually sync, then edit a file
+2. Force-quit and reopen Obsidian
+**Expected:** No automatic sync on startup, pending changes remain in storage until autoSync is re-enabled
+
+### TC-CRASH-003: Empty pending buffer causes no action
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, vault fully synced
+**Steps:**
+1. Restart Obsidian normally (no pending changes)
+**Expected:** No restore log message, no sync triggered on startup
+
+### TC-CRASH-004: Stale pending changes are handled gracefully
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled
+**Steps:**
+1. Edit a file, force-quit before sync
+2. From another device, sync the same file to GitHub
+3. Reopen Obsidian
+**Expected:** Restore triggers sync; SHA comparison detects file already synced; no duplicate push or conflict
+
+### TC-CRASH-005: Successful sync clears persisted buffer
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 5s
+**Steps:**
+1. Edit a file, wait for sync to complete
+2. Check data.json → pendingChanges should be empty `{}`
+3. Force-quit and reopen Obsidian
+**Expected:** No restore on startup (buffer was cleared after successful sync)
+
+---
+
 ## Group L: Mobile-Specific
 
 ### TC-MOB-001: Settings tab renders on mobile

@@ -311,6 +311,107 @@ describe("ChangeQueue", () => {
 		});
 	});
 
+	describe("onPersist", () => {
+		it("calls onPersist after push (via microtask)", async () => {
+			const onReady = vi.fn();
+			const onPersist = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, onPersist });
+
+			queue.push("note.md", "create");
+			await Promise.resolve();
+
+			expect(onPersist).toHaveBeenCalledTimes(1);
+			expect(onPersist).toHaveBeenCalledWith({ "note.md": "create" });
+		});
+
+		it("batches sequential pushes into single persist call", async () => {
+			const onReady = vi.fn();
+			const onPersist = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, onPersist });
+
+			queue.push("note.md", "create");
+			queue.push("note.md", "modify");
+
+			// Both pushes happen synchronously — only one microtask persist
+			await Promise.resolve();
+			expect(onPersist).toHaveBeenCalledTimes(1);
+			expect(onPersist).toHaveBeenCalledWith({ "note.md": "create" });
+		});
+
+		it("calls onPersist with empty object when entries cancel out", async () => {
+			const onReady = vi.fn();
+			const onPersist = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, onPersist });
+
+			queue.push("note.md", "create");
+			queue.push("note.md", "delete");
+
+			await Promise.resolve();
+			expect(onPersist).toHaveBeenCalledTimes(1);
+			expect(onPersist).toHaveBeenCalledWith({});
+		});
+
+		it("calls onPersist with empty object on flush (synchronously)", () => {
+			const onReady = vi.fn();
+			const onPersist = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, onPersist });
+
+			queue.push("a.md", "create");
+			queue.push("b.md", "modify");
+			onPersist.mockClear();
+
+			queue.flush();
+
+			// flush persists synchronously via persistNow
+			expect(onPersist).toHaveBeenCalledTimes(1);
+			expect(onPersist).toHaveBeenCalledWith({});
+		});
+
+		it("does NOT call onPersist on destroy", async () => {
+			const onReady = vi.fn();
+			const onPersist = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, onPersist });
+
+			queue.push("note.md", "create");
+			await Promise.resolve();
+			onPersist.mockClear();
+
+			queue.destroy();
+			await Promise.resolve();
+
+			expect(onPersist).not.toHaveBeenCalled();
+		});
+
+		it("works without onPersist callback", () => {
+			const onReady = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady });
+
+			expect(() => {
+				queue.push("note.md", "create");
+				queue.flush();
+				queue.destroy();
+			}).not.toThrow();
+		});
+
+		it("persists multiple paths correctly", async () => {
+			const onReady = vi.fn();
+			const onPersist = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, onPersist });
+
+			queue.push("a.md", "create");
+			queue.push("b.md", "modify");
+			queue.push("c.md", "delete");
+
+			await Promise.resolve();
+			expect(onPersist).toHaveBeenCalledTimes(1);
+			expect(onPersist).toHaveBeenCalledWith({
+				"a.md": "create",
+				"b.md": "modify",
+				"c.md": "delete",
+			});
+		});
+	});
+
 	describe("rename handling (delete old + create new)", () => {
 		it("handles rename as delete old path + create new path", () => {
 			const onReady = vi.fn();

@@ -9,9 +9,12 @@ import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
-import type { GHVaultSettings, LogLevel } from "./types";
+import type { ChangeType, GHVaultSettings, LogLevel } from "./types";
 import { DEFAULT_SETTINGS, SECRET_PATTERN, VALID_LOG_LEVELS } from "./types";
 import { Logger } from "./utils/logger";
+
+const PENDING_CHANGES_KEY = "pendingChanges";
+const VALID_CHANGE_TYPES = new Set<string>(["create", "modify", "delete"]);
 
 export default class GHVaultPlugin extends Plugin {
 	private static readonly SYNC_COOLDOWN_MS = 5000;
@@ -71,6 +74,7 @@ export default class GHVaultPlugin extends Plugin {
 
 		this.rebuildSyncEngine();
 		this.setupAutoSync();
+		await this.restorePendingChanges();
 	}
 
 	async onunload(): Promise<void> {
@@ -224,6 +228,9 @@ export default class GHVaultPlugin extends Plugin {
 			onReady: () => {
 				this.runSync(true);
 			},
+			onPersist: (pending) => {
+				this.persistPendingChanges(pending);
+			},
 		});
 
 		this.eventRefs = [
@@ -333,6 +340,40 @@ export default class GHVaultPlugin extends Plugin {
 
 		if (this.settings.autoSync && this.syncEngine) {
 			this.schedulePullCheck();
+		}
+	}
+
+	private persistPendingChanges(pending: Record<string, ChangeType>): void {
+		this.loadData()
+			.then((data) => {
+				const store = data || {};
+				store[PENDING_CHANGES_KEY] = pending;
+				return this.saveData(store);
+			})
+			.catch((error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				this.logger?.warn("Failed to persist pending changes", { error: message });
+			});
+	}
+
+	private async restorePendingChanges(): Promise<void> {
+		if (!this.changeQueue || !this.settings.autoSync) return;
+
+		const data = await this.loadData();
+		const raw = data?.[PENDING_CHANGES_KEY];
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+
+		const entries = raw as Record<string, unknown>;
+		let restored = 0;
+		for (const [path, type] of Object.entries(entries)) {
+			if (typeof path !== "string" || !path) continue;
+			if (typeof type !== "string" || !VALID_CHANGE_TYPES.has(type)) continue;
+			this.changeQueue.push(path, type as ChangeType);
+			restored++;
+		}
+
+		if (restored > 0) {
+			this.logger?.info("Restored pending changes from previous session", { count: restored });
 		}
 	}
 

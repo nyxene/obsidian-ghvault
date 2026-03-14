@@ -36,6 +36,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Subfolder sync** — sync a specific folder in the repo instead of the entire repository
 - **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
+- **Crash recovery** — pending changes are persisted to disk and restored after restart
 
 ## Requirements
 
