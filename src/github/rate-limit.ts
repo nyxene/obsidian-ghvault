@@ -30,6 +30,12 @@ export class RateLimiter {
 		}
 	}
 
+	canMakeRequest(type: "rest" | "graphql" = "rest"): boolean {
+		const state = type === "graphql" ? this.graphql : this.rest;
+		if (!state) return true;
+		return !(state.remaining <= 0 && state.resetAt.getTime() > Date.now());
+	}
+
 	assertCanMakeRequest(type: "rest" | "graphql" = "rest"): void {
 		const state = type === "graphql" ? this.graphql : this.rest;
 		if (!state) return;
