@@ -257,11 +257,12 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates seven Setting instances", () => {
+		it("creates nine Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
-			// token, owner, repo, branch, sync folder, test connection, log level
-			expect(getSettings()).toHaveLength(7);
+			// token, owner, repo, branch, sync folder, test connection,
+			// auto-sync, auto-sync debounce, log level
+			expect(getSettings()).toHaveLength(9);
 		});
 
 		it("creates settings with expected names", () => {
@@ -274,6 +275,8 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Branch");
 			expect(names).toContain("Sync folder");
 			expect(names).toContain("Test connection");
+			expect(names).toContain("Auto-sync");
+			expect(names).toContain("Auto-sync debounce");
 			expect(names).toContain("Log level");
 		});
 
@@ -446,6 +449,114 @@ describe("GHVaultSettingTab", () => {
 			await logSetting.dropdownComponents[0].simulateChange("INVALID");
 			expect(settings.logLevel).toBe("info");
 			expect(callbacks.onSave).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("auto-sync settings", () => {
+		it("renders Auto-sync toggle with current value", () => {
+			const { tab } = createTab({ autoSync: true });
+			tab.display();
+			const setting = findSettingByName("Auto-sync");
+			expect(setting).toBeDefined();
+			expect(setting.toggleComponents[0].getValue()).toBe(true);
+		});
+
+		it("saves autoSync on toggle change", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSync: false });
+			tab.display();
+			const setting = findSettingByName("Auto-sync");
+			await setting.toggleComponents[0].simulateChange(true);
+			expect(settings.autoSync).toBe(true);
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("renders Auto-sync debounce with current value", () => {
+			const { tab } = createTab({ autoSyncDebounce: 30 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			expect(setting).toBeDefined();
+			expect(setting.textComponents[0].getValue()).toBe("30");
+		});
+
+		it("saves valid debounce value and updates description", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncDebounce: 10 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			await setting.textComponents[0].simulateChange("60");
+			expect(settings.autoSyncDebounce).toBe(60);
+			expect(callbacks.onSave).toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("1–300");
+		});
+
+		it("shows warning for value below 1 without saving", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncDebounce: 10 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			await setting.textComponents[0].simulateChange("0");
+			expect(settings.autoSyncDebounce).toBe(10);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("Min 1s");
+		});
+
+		it("shows warning for value above 300 without saving", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncDebounce: 10 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			await setting.textComponents[0].simulateChange("999");
+			expect(settings.autoSyncDebounce).toBe(10);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("Max 300s");
+		});
+
+		it("shows warning for non-numeric input without saving", async () => {
+			const { tab, callbacks, settings } = createTab({ autoSyncDebounce: 10 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			await setting.textComponents[0].simulateChange("abc");
+			expect(settings.autoSyncDebounce).toBe(10);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+			expect(setting.getDesc()).toContain("Enter 1–300");
+		});
+
+		it("does not touch input field on invalid value (allows typing)", async () => {
+			const { tab } = createTab({ autoSyncDebounce: 10 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			const textComponent = setting.textComponents[0];
+			const setValueSpy = vi.spyOn(textComponent, "setValue");
+			setValueSpy.mockClear();
+			await textComponent.simulateChange("");
+			// setValue should NOT be called — user must be able to clear and retype
+			expect(setValueSpy).not.toHaveBeenCalled();
+		});
+
+		it("restores last saved value on blur", async () => {
+			const { tab } = createTab({ autoSyncDebounce: 30 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			const textComponent = setting.textComponents[0];
+			// Type invalid value
+			await textComponent.simulateChange("abc");
+			expect(setting.getDesc()).toContain("Enter 1–300");
+			// Blur restores saved value
+			textComponent.inputEl.simulateEvent("blur");
+			expect(textComponent.getValue()).toBe("30");
+			expect(setting.getDesc()).not.toContain("⚠");
+		});
+
+		it("restores last saved value on blur after out-of-range input", async () => {
+			const { tab, settings } = createTab({ autoSyncDebounce: 10 });
+			tab.display();
+			const setting = findSettingByName("Auto-sync debounce");
+			const textComponent = setting.textComponents[0];
+			// Type valid value first, then invalid
+			await textComponent.simulateChange("60");
+			expect(settings.autoSyncDebounce).toBe(60);
+			await textComponent.simulateChange("999");
+			expect(settings.autoSyncDebounce).toBe(60); // unchanged
+			// Blur restores to last saved (60)
+			textComponent.inputEl.simulateEvent("blur");
+			expect(textComponent.getValue()).toBe("60");
 		});
 	});
 

@@ -83,6 +83,23 @@ vi.mock("./sync/vault-adapter", () => ({
 	ObsidianVaultAdapter: class MockObsidianVaultAdapter {},
 }));
 
+let capturedChangeQueueOnReady: (() => void) | null = null;
+const mockChangeQueuePause = vi.fn();
+const mockChangeQueueResume = vi.fn();
+const mockChangeQueueDestroy = vi.fn();
+
+vi.mock("./sync/change-queue", () => ({
+	ChangeQueue: class MockChangeQueue {
+		constructor(options: { debounceMs: number; onReady: () => void }) {
+			capturedChangeQueueOnReady = options.onReady;
+		}
+		pause = mockChangeQueuePause;
+		resume = mockChangeQueueResume;
+		destroy = mockChangeQueueDestroy;
+		push = vi.fn();
+	},
+}));
+
 vi.mock("./utils/logger", () => ({
 	Logger: class MockLogger {
 		init = vi.fn().mockResolvedValue(undefined);
@@ -147,14 +164,18 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	commandCallback: () => void;
 	onTestConnection: () => Promise<void>;
 	onSave: (settings: Record<string, unknown>) => Promise<void>;
+	// biome-ignore lint/suspicious/noExplicitAny: mock Vault with test helpers
+	vault: any;
 }> {
+	const { Vault } = await import("obsidian");
 	const mod = await import("./main");
 	const PluginClass = mod.default as AnyPlugin;
 	const plugin = new PluginClass();
 
+	const vault = new Vault();
 	plugin.loadData = vi.fn().mockResolvedValue(loadDataResult);
 	plugin.saveData = vi.fn().mockResolvedValue(undefined);
-	plugin.app = { vault: {} } as AnyPlugin;
+	plugin.app = { vault } as AnyPlugin;
 
 	const statusBarEl = createMockElement();
 	let ribbonCallback: () => void = () => {};
@@ -182,7 +203,7 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 		settings: Record<string, unknown>,
 	) => Promise<void>;
 
-	return { plugin, statusBarEl, ribbonCallback, commandCallback, onTestConnection, onSave };
+	return { plugin, statusBarEl, ribbonCallback, commandCallback, onTestConnection, onSave, vault };
 }
 
 describe("sanitizeErrorForUI (exported)", () => {
@@ -271,6 +292,10 @@ describe("GHVaultPlugin", () => {
 		mockStateClear.mockClear();
 		mockStateSave.mockClear();
 		capturedSettingCallbacks = {};
+		capturedChangeQueueOnReady = null;
+		mockChangeQueuePause.mockClear();
+		mockChangeQueueResume.mockClear();
+		mockChangeQueueDestroy.mockClear();
 	});
 
 	describe("loadSettings", () => {
@@ -609,6 +634,145 @@ describe("GHVaultPlugin", () => {
 			// Engine should have been rebuilt (new instance)
 			expect(plugin.syncEngine).not.toBeNull();
 			expect(plugin.syncEngine).not.toBe(engineBefore);
+		});
+	});
+
+	describe("auto-sync", () => {
+		const AUTO_SYNC_SETTINGS = {
+			settings: {
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				autoSync: true,
+				autoSyncDebounce: 10,
+			},
+		};
+
+		it("sets up ChangeQueue when autoSync is enabled", async () => {
+			await loadPlugin(AUTO_SYNC_SETTINGS);
+			expect(capturedChangeQueueOnReady).not.toBeNull();
+		});
+
+		it("does not set up ChangeQueue when autoSync is disabled", async () => {
+			await loadPlugin(CONFIGURED_SETTINGS);
+			expect(capturedChangeQueueOnReady).toBeNull();
+		});
+
+		it("registers vault event listeners when autoSync is enabled", async () => {
+			const { vault } = await loadPlugin(AUTO_SYNC_SETTINGS);
+			// create, modify, delete, rename = 4 listeners
+			expect(vault.getListenerCount()).toBe(4);
+		});
+
+		it("does not register vault event listeners when autoSync is disabled", async () => {
+			const { vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(vault.getListenerCount()).toBe(0);
+		});
+
+		it("onReady triggers silent sync (no 'up to date' notice)", async () => {
+			await loadPlugin(AUTO_SYNC_SETTINGS);
+			noticeLog.length = 0;
+
+			capturedChangeQueueOnReady?.();
+			await vi.waitFor(() => {
+				expect(mockSync).toHaveBeenCalledTimes(1);
+			});
+
+			// Silent sync should not show "Already up to date" notice
+			const upToDateNotices = noticeLog.filter((n) => n.message.includes("up to date"));
+			expect(upToDateNotices).toHaveLength(0);
+		});
+
+		it("pauses changeQueue during sync and resumes after", async () => {
+			let resolveSyncPromise: (value: unknown) => void = () => {};
+			mockSync.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						resolveSyncPromise = resolve;
+					}),
+			);
+
+			await loadPlugin(AUTO_SYNC_SETTINGS);
+
+			// Trigger sync via onReady
+			capturedChangeQueueOnReady?.();
+			await vi.waitFor(() => {
+				expect(mockChangeQueuePause).toHaveBeenCalledTimes(1);
+			});
+			expect(mockChangeQueueResume).not.toHaveBeenCalled();
+
+			// Resolve sync
+			resolveSyncPromise({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: null,
+			});
+
+			await vi.waitFor(() => {
+				expect(mockChangeQueueResume).toHaveBeenCalledTimes(1);
+			});
+		});
+
+		it("teardownAutoSync removes event listeners on onunload", async () => {
+			const { plugin, vault } = await loadPlugin(AUTO_SYNC_SETTINGS);
+			expect(vault.getListenerCount()).toBe(4);
+
+			await plugin.onunload();
+			expect(vault.getListenerCount()).toBe(0);
+			expect(mockChangeQueueDestroy).toHaveBeenCalled();
+		});
+
+		it("onSave with autoSync toggled on sets up auto-sync", async () => {
+			const { onSave } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(capturedChangeQueueOnReady).toBeNull();
+
+			await onSave({
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				syncFolder: "",
+				logLevel: "info",
+				autoSync: true,
+				autoSyncDebounce: 10,
+			});
+
+			expect(capturedChangeQueueOnReady).not.toBeNull();
+		});
+
+		it("loadSettings parses autoSync boolean", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSync: true },
+			});
+			expect(plugin.settings.autoSync).toBe(true);
+		});
+
+		it("loadSettings defaults autoSync to false for non-boolean", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSync: "yes" },
+			});
+			expect(plugin.settings.autoSync).toBe(false);
+		});
+
+		it("loadSettings parses autoSyncDebounce within range", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncDebounce: 30 },
+			});
+			expect(plugin.settings.autoSyncDebounce).toBe(30);
+		});
+
+		it("loadSettings defaults autoSyncDebounce for out-of-range values", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncDebounce: 500 },
+			});
+			expect(plugin.settings.autoSyncDebounce).toBe(DEFAULT_SETTINGS.autoSyncDebounce);
+		});
+
+		it("loadSettings defaults autoSyncDebounce for non-number", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { autoSyncDebounce: "fast" },
+			});
+			expect(plugin.settings.autoSyncDebounce).toBe(DEFAULT_SETTINGS.autoSyncDebounce);
 		});
 	});
 

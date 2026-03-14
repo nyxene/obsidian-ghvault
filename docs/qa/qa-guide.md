@@ -51,9 +51,9 @@ Follow the test catalog in [manual-test-cases.md](manual-test-cases.md).
 
 ### Priorities
 
-- **P0 (smoke)**: Must pass every release. 21 tests.
-- **P1 (regression)**: Must pass for minor/major releases. 16 tests.
-- **P2 (edge cases)**: Must pass for major releases only. 3 tests.
+- **P0 (smoke)**: Must pass every release. 27 tests.
+- **P1 (regression)**: Must pass for minor/major releases. 24 tests.
+- **P2 (edge cases)**: Must pass for major releases only. 5 tests.
 
 ### Result tracking
 

@@ -26,7 +26,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Install plugin into `.obsidian/plugins/ghvault/`
 2. Enable plugin in Obsidian settings
 3. Open GHVault settings tab
-**Expected:** All fields empty, branch = "main", log level = "info", status bar shows "GHVault: idle"
+**Expected:** All fields empty, branch = "main", auto-sync = off, debounce = 10, log level = "info", status bar shows "GHVault: idle"
 
 ### TC-SET-002: Test Connection with invalid token
 **Priority:** P0
@@ -319,7 +319,111 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group K: Mobile-Specific
+## Group K: Auto-Sync
+
+### TC-AUTO-001: Auto-sync triggers after file edit
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 5s, initial sync complete
+**Steps:**
+1. Edit a markdown file in vault
+2. Wait 5+ seconds without making changes
+**Expected:** Sync runs automatically, status bar shows "syncing..." then "idle", file appears on GitHub
+
+### TC-AUTO-002: Debounce resets on rapid edits
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 10s
+**Steps:**
+1. Edit file A
+2. Wait 5 seconds
+3. Edit file B
+4. Wait 5 seconds
+5. Edit file C
+6. Wait 10+ seconds
+**Expected:** Only one sync happens (after 10s of quiet), all 3 files pushed in one commit
+
+### TC-AUTO-003: File create/delete/rename triggers auto-sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 5s
+**Steps:**
+1. Create a new file, wait 5s → sync runs
+2. Delete a file, wait 5s → sync runs
+3. Rename a file, wait 5s → sync runs
+**Expected:** Each operation triggers a sync after debounce period
+
+### TC-AUTO-004: Events during sync are not lost
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 5s, a large file (~2MB) in repo for slow sync
+**Steps:**
+1. Trigger sync (e.g., edit a file, wait for debounce)
+2. While sync is running (status bar shows "syncing..."), edit another file
+3. Wait for first sync to complete + debounce period
+**Expected:** A second sync runs automatically after the first completes, pushing the file edited during sync
+
+### TC-AUTO-005: Excluded paths do not trigger auto-sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 3s
+**Steps:**
+1. Modify `.obsidian/workspace.json` (e.g., open a different pane)
+2. Wait 5 seconds
+**Expected:** No sync triggered
+
+### TC-AUTO-006: Auto-sync toggle saves immediately
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open settings, toggle Auto-sync on
+2. Close and reopen settings
+**Expected:** Toggle shows enabled state
+
+### TC-AUTO-007: Debounce setting validates input
+**Priority:** P1
+**Platform:** Desktop
+**Steps:**
+1. Set debounce to "abc" → warning in description, value unchanged
+2. Set debounce to "0" → warning "Min 1s", value unchanged
+3. Set debounce to "999" → warning "Max 300s", value unchanged
+4. Click away (blur) → field restores to last saved value
+5. Set debounce to "60" → saves, description shows range info
+**Expected:** All validations work as described, no data loss
+
+### TC-AUTO-008: Auto-sync disabled by default
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Fresh install
+**Steps:**
+1. Enable plugin, open settings
+**Expected:** Auto-sync toggle is off, no vault event listeners active
+
+### TC-AUTO-009: Cooldown respected in auto-sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Auto-sync enabled, debounce = 1s
+**Steps:**
+1. Edit a file → sync runs after 1s
+2. Immediately edit another file → debounce 1s
+3. Second sync attempt hits 5s cooldown → skipped silently
+4. Wait 5s, edit another file → sync runs
+**Expected:** No more than one sync per 5 seconds, no error notices
+
+### TC-AUTO-010: Disable/re-enable auto-sync cleans up listeners
+**Priority:** P2
+**Platform:** Both
+**Steps:**
+1. Enable auto-sync, verify it works
+2. Disable auto-sync in settings
+3. Edit a file, wait — no sync should trigger
+4. Re-enable auto-sync
+5. Edit a file, wait — sync should trigger
+**Expected:** Toggling on/off correctly registers/unregisters vault event listeners
+
+---
+
+## Group L: Mobile-Specific
 
 ### TC-MOB-001: Settings tab renders on mobile
 **Priority:** P0
@@ -363,7 +467,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group L: Plugin Lifecycle
+## Group M: Plugin Lifecycle
 
 ### TC-LIFE-001: Disable/enable preserves settings
 **Priority:** P1
@@ -385,7 +489,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group M: Obsidian Community Plugin Compliance
+## Group N: Obsidian Community Plugin Compliance
 
 ### TC-OBSDN-001: No innerHTML/outerHTML
 **Priority:** P0
@@ -410,7 +514,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group N: Binary File Support
+## Group O: Binary File Support
 
 ### TC-BIN-001: Pull PNG image from repo
 **Priority:** P0

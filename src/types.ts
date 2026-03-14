@@ -9,6 +9,8 @@ export interface GHVaultSettings {
 	branch: string;
 	syncFolder: string;
 	logLevel: LogLevel;
+	autoSync: boolean;
+	autoSyncDebounce: number;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -154,4 +156,6 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	branch: "main",
 	syncFolder: "",
 	logLevel: "info",
+	autoSync: false,
+	autoSyncDebounce: 10,
 };
