@@ -4,6 +4,7 @@ import { isExcluded } from "../utils/path";
 export interface ChangeQueueOptions {
 	debounceMs: number;
 	onReady: () => void;
+	onPersist?: (pending: Record<string, ChangeType>) => void;
 }
 
 export class ChangeQueue {
@@ -11,11 +12,14 @@ export class ChangeQueue {
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private readonly debounceMs: number;
 	private readonly onReady: () => void;
+	private readonly onPersist?: (pending: Record<string, ChangeType>) => void;
+	private persistScheduled = false;
 	private paused = false;
 
 	constructor(options: ChangeQueueOptions) {
 		this.debounceMs = options.debounceMs;
 		this.onReady = options.onReady;
+		this.onPersist = options.onPersist;
 	}
 
 	push(path: string, type: ChangeType): void {
@@ -33,6 +37,8 @@ export class ChangeQueue {
 			this.pending.set(path, type);
 		}
 
+		this.persist();
+
 		if (!this.paused) {
 			this.resetTimer();
 		}
@@ -44,6 +50,7 @@ export class ChangeQueue {
 			changes.push({ path, type });
 		}
 		this.pending.clear();
+		this.persistNow();
 		return changes;
 	}
 
@@ -68,6 +75,26 @@ export class ChangeQueue {
 
 	get size(): number {
 		return this.pending.size;
+	}
+
+	private persist(): void {
+		if (!this.onPersist) return;
+		if (this.persistScheduled) return;
+		this.persistScheduled = true;
+		queueMicrotask(() => {
+			this.persistScheduled = false;
+			this.persistNow();
+		});
+	}
+
+	private persistNow(): void {
+		if (!this.onPersist) return;
+		this.persistScheduled = false;
+		const snapshot: Record<string, ChangeType> = {};
+		for (const [path, type] of this.pending) {
+			snapshot[path] = type;
+		}
+		this.onPersist(snapshot);
 	}
 
 	private resetTimer(): void {

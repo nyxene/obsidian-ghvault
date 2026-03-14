@@ -90,19 +90,26 @@ vi.mock("./sync/vault-adapter", () => ({
 }));
 
 let capturedChangeQueueOnReady: (() => void) | null = null;
+let capturedChangeQueueOnPersist: ((pending: Record<string, string>) => void) | null = null;
 const mockChangeQueuePause = vi.fn();
 const mockChangeQueueResume = vi.fn();
 const mockChangeQueueDestroy = vi.fn();
+const mockChangeQueuePush = vi.fn();
 
 vi.mock("./sync/change-queue", () => ({
 	ChangeQueue: class MockChangeQueue {
-		constructor(options: { debounceMs: number; onReady: () => void }) {
+		constructor(options: {
+			debounceMs: number;
+			onReady: () => void;
+			onPersist?: (pending: Record<string, string>) => void;
+		}) {
 			capturedChangeQueueOnReady = options.onReady;
+			capturedChangeQueueOnPersist = options.onPersist ?? null;
 		}
 		pause = mockChangeQueuePause;
 		resume = mockChangeQueueResume;
 		destroy = mockChangeQueueDestroy;
-		push = vi.fn();
+		push = mockChangeQueuePush;
 	},
 }));
 
@@ -306,8 +313,10 @@ describe("GHVaultPlugin", () => {
 		mockGetHeadOid.mockReset().mockReturnValue("");
 		capturedSettingCallbacks = {};
 		capturedChangeQueueOnReady = null;
+		capturedChangeQueueOnPersist = null;
 		mockChangeQueuePause.mockClear();
 		mockChangeQueueResume.mockClear();
+		mockChangeQueuePush.mockClear();
 		mockChangeQueueDestroy.mockClear();
 	});
 
@@ -814,6 +823,170 @@ describe("GHVaultPlugin", () => {
 				settings: { autoSyncPullInterval: "slow" },
 			});
 			expect(plugin.settings.autoSyncPullInterval).toBe(DEFAULT_SETTINGS.autoSyncPullInterval);
+		});
+	});
+
+	describe("crash recovery", () => {
+		const AUTO_SYNC_WITH_PENDING = {
+			settings: {
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				autoSync: true,
+				autoSyncDebounce: 10,
+			},
+			pendingChanges: {
+				"notes/todo.md": "modify",
+				"new-file.md": "create",
+			},
+		};
+
+		it("restores pending changes on load when autoSync is enabled", async () => {
+			await loadPlugin(AUTO_SYNC_WITH_PENDING);
+
+			expect(mockChangeQueuePush).toHaveBeenCalledTimes(2);
+			expect(mockChangeQueuePush).toHaveBeenCalledWith("notes/todo.md", "modify");
+			expect(mockChangeQueuePush).toHaveBeenCalledWith("new-file.md", "create");
+		});
+
+		it("does not restore pending changes when autoSync is disabled", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: false,
+				},
+				pendingChanges: {
+					"notes/todo.md": "modify",
+				},
+			});
+
+			expect(mockChangeQueuePush).not.toHaveBeenCalled();
+		});
+
+		it("does not restore when pendingChanges is empty", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+				pendingChanges: {},
+			});
+
+			expect(mockChangeQueuePush).not.toHaveBeenCalled();
+		});
+
+		it("does not restore when pendingChanges is missing", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+			});
+
+			expect(mockChangeQueuePush).not.toHaveBeenCalled();
+		});
+
+		it("skips entries with invalid change types", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+				pendingChanges: {
+					"valid.md": "modify",
+					"invalid.md": "unknown_type",
+					"also-invalid.md": 12345,
+					"": "create",
+				},
+			});
+
+			expect(mockChangeQueuePush).toHaveBeenCalledTimes(1);
+			expect(mockChangeQueuePush).toHaveBeenCalledWith("valid.md", "modify");
+		});
+
+		it("skips restore when pendingChanges is not an object", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+				pendingChanges: "not-an-object",
+			});
+
+			expect(mockChangeQueuePush).not.toHaveBeenCalled();
+		});
+
+		it("skips restore when pendingChanges is an array", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+				pendingChanges: ["note.md"],
+			});
+
+			expect(mockChangeQueuePush).not.toHaveBeenCalled();
+		});
+
+		it("passes onPersist callback to ChangeQueue", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+			});
+
+			expect(capturedChangeQueueOnPersist).not.toBeNull();
+		});
+
+		it("onPersist saves pending changes to storage", async () => {
+			const { plugin } = await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+			});
+
+			capturedChangeQueueOnPersist?.({ "test.md": "modify" });
+
+			await vi.waitFor(() => {
+				expect(plugin.saveData).toHaveBeenCalled();
+			});
+
+			const savedData = vi.mocked(plugin.saveData).mock.calls[0][0];
+			expect(savedData.pendingChanges).toEqual({ "test.md": "modify" });
 		});
 	});
 
