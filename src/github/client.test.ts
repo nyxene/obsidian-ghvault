@@ -370,4 +370,64 @@ describe("GitHubClient", () => {
 			await expect(client.getRepoInfo()).rejects.toThrow(GitHubRateLimitError);
 		});
 	});
+
+	describe("listFileCommits", () => {
+		it("returns mapped commit info", async () => {
+			const client = createClient();
+			mockResponse([
+				{
+					sha: "abc123",
+					commit: {
+						message: "vault sync: 1 file(s)",
+						author: { name: "John", date: "2026-03-15T10:00:00Z" },
+					},
+					html_url: "https://github.com/owner/repo/commit/abc123",
+				},
+				{
+					sha: "def456",
+					commit: {
+						message: "initial commit",
+						author: { name: "Jane", date: "2026-03-14T09:00:00Z" },
+					},
+					html_url: "https://github.com/owner/repo/commit/def456",
+				},
+			]);
+
+			const commits = await client.listFileCommits("docs/note.md", "main");
+
+			expect(commits).toHaveLength(2);
+			expect(commits[0]).toEqual({
+				sha: "abc123",
+				message: "vault sync: 1 file(s)",
+				authorName: "John",
+				date: "2026-03-15T10:00:00Z",
+				htmlUrl: "https://github.com/owner/repo/commit/abc123",
+			});
+			expect(commits[1].authorName).toBe("Jane");
+		});
+
+		it("passes path, branch, perPage, page as query params", async () => {
+			const client = createClient();
+			mockResponse([]);
+
+			await client.listFileCommits("folder/file.md", "develop", 10, 3);
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0];
+			const url = typeof arg === "string" ? arg : (arg as { url: string }).url;
+			expect(url).toContain("path=folder%2Ffile.md");
+			expect(url).toContain("sha=develop");
+			expect(url).toContain("per_page=10");
+			expect(url).toContain("page=3");
+		});
+
+		it("returns empty array when no commits", async () => {
+			const client = createClient();
+			mockResponse([]);
+
+			const commits = await client.listFileCommits("new.md", "main");
+
+			expect(commits).toEqual([]);
+		});
+	});
 });

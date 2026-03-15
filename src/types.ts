@@ -77,6 +77,14 @@ export interface ConflictInfo {
 	remoteChange: ChangeType;
 }
 
+export interface FileCommitInfo {
+	sha: string;
+	message: string;
+	authorName: string;
+	date: string;
+	htmlUrl: string;
+}
+
 // ---------------------------------------------------------------------------
 // GitHub API types
 // ---------------------------------------------------------------------------

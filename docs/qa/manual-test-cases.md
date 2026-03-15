@@ -374,6 +374,33 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Sync
 **Expected:** Treated as separate delete + create. Notice shows pushed/pulled counts, no "renamed".
 
+### TC-HIST-001: File history shows commits for synced file
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** `note.md` synced with at least 1 push
+**Steps:**
+1. Open `note.md`
+2. Run command "Show file history"
+**Expected:** Modal opens with commit list. Each entry shows message, author, date. Click opens GitHub.
+
+### TC-HIST-002: File history — no commits
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** New file never pushed
+**Steps:**
+1. Create `brand-new.md`, open it
+2. Run command "Show file history"
+**Expected:** Modal shows "No commits found for this file"
+
+### TC-HIST-003: File history — Load more
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** File with >20 commits
+**Steps:**
+1. Open file, run "Show file history"
+2. Scroll to bottom, click "Load more"
+**Expected:** Next 20 commits appended. Button hidden when no more.
+
 ---
 
 ## Group H: Sync Folder

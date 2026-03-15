@@ -24,7 +24,9 @@ import {
 	VALID_LOG_LEVELS,
 } from "./types";
 import { ConflictModal } from "./ui/conflict-modal";
+import { FileHistoryModal } from "./ui/file-history-modal";
 import { Logger } from "./utils/logger";
+import { toRepoPath } from "./utils/path";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
 const VALID_CHANGE_TYPES = new Set<string>(["create", "modify", "delete"]);
@@ -79,6 +81,19 @@ export default class GHVaultPlugin extends Plugin {
 			name: "Sync now",
 			callback: () => {
 				this.runSync();
+			},
+		});
+
+		this.addCommand({
+			id: "ghvault-file-history",
+			name: "Show file history",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || !this.githubClient) return false;
+				if (!checking) {
+					this.showFileHistory(file.path);
+				}
+				return true;
 			},
 		});
 
@@ -170,6 +185,16 @@ export default class GHVaultPlugin extends Plugin {
 		const modal = new ConflictModal(this.app, conflicts);
 		modal.open();
 		return modal.waitForDecisions();
+	}
+
+	private showFileHistory(vaultPath: string): void {
+		if (!this.githubClient) {
+			new Notice("GHVault: Configure settings first (token, owner, repo)");
+			return;
+		}
+		const repoPath = toRepoPath(vaultPath, this.settings.syncFolder);
+		const modal = new FileHistoryModal(this.app, repoPath, this.settings.branch, this.githubClient);
+		modal.open();
 	}
 
 	private async testConnection(): Promise<void> {

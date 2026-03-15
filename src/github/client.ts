@@ -1,5 +1,5 @@
 import type { RequestUrlResponse } from "obsidian";
-import type { GitHubRef, GitHubRepoInfo, GitHubTreeEntry } from "../types";
+import type { FileCommitInfo, GitHubRef, GitHubRepoInfo, GitHubTreeEntry } from "../types";
 import {
 	GitHubAuthError,
 	GitHubConflictError,
@@ -118,6 +118,31 @@ export class GitHubClient {
 			`/repos/${owner}/${repo}/branches?per_page=100`,
 		);
 		return data.map((b) => b.name);
+	}
+
+	async listFileCommits(
+		path: string,
+		branch: string,
+		perPage = 20,
+		page = 1,
+	): Promise<FileCommitInfo[]> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const query = `?path=${encodeURIComponent(path)}&sha=${encodeURIComponent(branch)}&per_page=${perPage}&page=${page}`;
+		const data = await this.request<
+			Array<{
+				sha: string;
+				commit: { message: string; author: { name: string; date: string } };
+				html_url: string;
+			}>
+		>(`/repos/${owner}/${repo}/commits${query}`);
+		return data.map((c) => ({
+			sha: c.sha,
+			message: c.commit.message,
+			authorName: c.commit.author.name,
+			date: c.commit.author.date,
+			htmlUrl: c.html_url,
+		}));
 	}
 
 	async createFile(
