@@ -598,6 +598,100 @@ describe("Sync integration", () => {
 		});
 	});
 
+	describe("first sync merge — both sides non-empty", () => {
+		it("identical files are cached without pull or push", async () => {
+			const content = "same content";
+			const { engine, vault, storage } = createIntegrationSetup({
+				localFiles: [{ path: "shared.md", content }],
+				remoteFiles: [{ path: "shared.md", sha: "mock-blob-sha", content, size: content.length }],
+			});
+
+			// Empty state = first sync
+			storage.data = {};
+
+			// getRemoteFileHash calls computeHashFromBuffer — return same hash as vault listFiles
+			const localHash = `hash-shared.md-${content.length}`;
+			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce(localHash);
+
+			const result = await engine.sync();
+
+			// Should NOT be a conflict
+			expect(result.conflicts).toHaveLength(0);
+			// Shared file should not be pulled (already exists locally with same content)
+			expect(result.pull.created).not.toContain("shared.md");
+			expect(result.pull.modified).not.toContain("shared.md");
+			// Should not push shared file either (already on remote)
+			// (but other local files like Welcome.md might be pushed)
+			expect(vault.files.get("shared.md")).toBe(content);
+		});
+
+		it("different-content files become conflicts on first sync", async () => {
+			const { engine, storage } = createIntegrationSetup({
+				localFiles: [{ path: "diff.md", content: "local version" }],
+				remoteFiles: [
+					{ path: "diff.md", sha: "mock-blob-sha", content: "remote version", size: 14 },
+				],
+			});
+
+			// Empty state = first sync
+			storage.data = {};
+
+			// getRemoteFileHash returns different hash than vault's listFiles
+			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("different-remote-hash");
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.conflicts[0].path).toBe("diff.md");
+		});
+
+		it("mixed: identical files cached, unique files synced, different files conflict", async () => {
+			const sharedContent = "identical on both sides";
+			const { engine, vault, storage } = createIntegrationSetup({
+				localFiles: [
+					{ path: "shared.md", content: sharedContent },
+					{ path: "local-only.md", content: "only in vault" },
+					{ path: "diff.md", content: "local diff" },
+				],
+				remoteFiles: [
+					{
+						path: "shared.md",
+						sha: "mock-blob-sha",
+						content: sharedContent,
+						size: sharedContent.length,
+					},
+					{ path: "remote-only.md", sha: "mock-blob-sha", content: "only on remote", size: 14 },
+					{ path: "diff.md", sha: "mock-blob-sha", content: "remote diff", size: 11 },
+				],
+			});
+
+			storage.data = {};
+
+			// Reset computeHashFromBuffer mock queue from prior tests, then set up for first sync
+			vi.mocked(computeHashFromBuffer).mockReset().mockResolvedValue("mock-hash");
+			// reconcileFirstSync calls getRemoteFileHash for overlapping files (shared.md, diff.md)
+			const sharedLocalHash = `hash-shared.md-${sharedContent.length}`;
+			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce(sharedLocalHash); // shared.md → matches
+			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("different-remote-hash"); // diff.md → differs
+
+			const result = await engine.sync();
+
+			// shared.md: identical → no conflict, cached
+			expect(result.conflicts.find((c) => c.path === "shared.md")).toBeUndefined();
+
+			// remote-only.md: pulled
+			expect(result.pull.created).toContain("remote-only.md");
+			expect(vault.files.get("remote-only.md")).toBe("only on remote");
+
+			// local-only.md: pushed
+			expect(result.push).not.toBeNull();
+			expect(result.push?.pushed).toContain("local-only.md");
+
+			// diff.md: conflict (different content)
+			expect(result.conflicts.find((c) => c.path === "diff.md")).toBeDefined();
+		});
+	});
+
 	describe("network failure during push — state integrity", () => {
 		it("does not corrupt state when graphql.createCommit throws", async () => {
 			const { engine, graphql, storage } = createIntegrationSetup({

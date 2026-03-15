@@ -115,6 +115,8 @@ The status bar shows the current state:
 2. **Conflict check**: detect files changed on both sides — resolve based on chosen strategy
 3. **Push**: collect local changes, batch them into a single GraphQL commit
 
+On **first sync** with a non-empty vault and repo, GHVault compares content hashes for files that exist on both sides. Identical files are cached without transfer. Files with different content are treated as conflicts.
+
 ### API usage
 
 | Operation | API | Why |

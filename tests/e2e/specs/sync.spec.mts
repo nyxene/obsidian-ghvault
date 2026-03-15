@@ -531,6 +531,97 @@ describe("conflict detection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Group 4b: First Sync Merge — non-empty vault + non-empty repo
+// ---------------------------------------------------------------------------
+describe("first sync merge", () => {
+	it("caches identical files without pull or push", async () => {
+		await ensureSyncEngine();
+
+		const sharedContent = "identical on both sides";
+		const sharedSha = await computeGitBlobSha(sharedContent);
+
+		// Write to vault before injecting mocks
+		await obsidianPage.write("first-sync-shared.md", sharedContent);
+
+		// Inject remote with same file — no cache means first sync
+		await injectMocks([
+			{ path: "first-sync-shared.md", sha: sharedSha, content: sharedContent, size: sharedContent.length },
+		]);
+
+		const result = await runSync();
+
+		// Identical content → not a conflict
+		expect(result.conflicts).toHaveLength(0);
+		// Should not be in pull results (no download needed)
+		expect(result.pull.created).not.toContain("first-sync-shared.md");
+		expect(result.pull.modified).not.toContain("first-sync-shared.md");
+		// Local file unchanged
+		const content = await obsidianPage.read("first-sync-shared.md");
+		expect(content).toBe(sharedContent);
+	});
+
+	it("treats different-content files as conflicts", async () => {
+		await ensureSyncEngine();
+
+		const remoteContent = "remote version for first sync";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("first-sync-diff.md", "local version for first sync");
+
+		await injectMocks([
+			{ path: "first-sync-diff.md", sha: remoteSha, content: remoteContent, size: remoteContent.length },
+		]);
+
+		const result = await runSync();
+
+		// Different content → conflict
+		expect(result.conflicts).toHaveLength(1);
+		expect(result.conflicts[0].path).toBe("first-sync-diff.md");
+		// Local file unchanged (strategy=skip default)
+		const content = await obsidianPage.read("first-sync-diff.md");
+		expect(content).toBe("local version for first sync");
+	});
+
+	it("mixed: identical cached, unique synced, different conflicted", async () => {
+		await ensureSyncEngine();
+
+		const sharedContent = "same content everywhere";
+		const sharedSha = await computeGitBlobSha(sharedContent);
+		const remoteOnlyContent = "only on remote";
+		const remoteOnlySha = await computeGitBlobSha(remoteOnlyContent);
+		const remoteDiffContent = "remote diff version";
+		const remoteDiffSha = await computeGitBlobSha(remoteDiffContent);
+
+		await obsidianPage.write("fs-shared.md", sharedContent);
+		await obsidianPage.write("fs-local-only.md", "only in vault");
+		await obsidianPage.write("fs-diff.md", "local diff version");
+
+		await injectMocks([
+			{ path: "fs-shared.md", sha: sharedSha, content: sharedContent, size: sharedContent.length },
+			{ path: "fs-remote-only.md", sha: remoteOnlySha, content: remoteOnlyContent, size: remoteOnlyContent.length },
+			{ path: "fs-diff.md", sha: remoteDiffSha, content: remoteDiffContent, size: remoteDiffContent.length },
+		]);
+
+		const result = await runSync();
+
+		// fs-shared.md: identical → no conflict
+		expect(result.conflicts.find((c: any) => c.path === "fs-shared.md")).toBeUndefined();
+
+		// fs-remote-only.md: pulled
+		expect(result.pull.created).toContain("fs-remote-only.md");
+		const remoteRead = await obsidianPage.read("fs-remote-only.md");
+		expect(remoteRead).toBe(remoteOnlyContent);
+
+		// fs-local-only.md: pushed
+		expect(result.push).not.toBeNull();
+		expect(result.push.pushed).toContain("fs-local-only.md");
+
+		// fs-diff.md: conflict
+		expect(result.conflicts.find((c: any) => c.path === "fs-diff.md")).toBeDefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Group 5: SyncFolder Filtering
 // ---------------------------------------------------------------------------
 describe("syncFolder filtering", () => {

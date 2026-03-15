@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FileChange, GitHubTreeEntry, SHACacheEntry } from "../types";
 import type { LocalFileInfo } from "./comparator";
-import { computeLocalChanges, computeRemoteChanges, detectConflicts } from "./comparator";
+import {
+	computeLocalChanges,
+	computeRemoteChanges,
+	detectConflicts,
+	reconcileFirstSync,
+} from "./comparator";
 
 function cacheEntry(overrides: Partial<SHACacheEntry> = {}): SHACacheEntry {
 	return {
@@ -257,5 +262,154 @@ describe("detectConflicts", () => {
 
 	it("returns empty when both change lists are empty", () => {
 		expect(detectConflicts([], [])).toEqual([]);
+	});
+});
+
+describe("reconcileFirstSync", () => {
+	it("removes identical files from both change lists and populates cache", async () => {
+		const localChanges: FileChange[] = [
+			{ path: "shared.md", type: "create" },
+			{ path: "local-only.md", type: "create" },
+		];
+		const remoteChanges: FileChange[] = [
+			{ path: "shared.md", type: "create" },
+			{ path: "remote-only.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [
+			{ path: "shared.md", contentHash: "abc123", size: 10 },
+			{ path: "local-only.md", contentHash: "def456", size: 20 },
+		];
+
+		const getRemoteFileHash = vi.fn().mockResolvedValue({
+			contentHash: "abc123",
+			remoteSha: "sha-remote",
+			size: 10,
+			isBinary: false,
+		});
+
+		const result = await reconcileFirstSync(
+			localChanges,
+			remoteChanges,
+			localFiles,
+			getRemoteFileHash,
+		);
+
+		expect(result.localChanges).toEqual([{ path: "local-only.md", type: "create" }]);
+		expect(result.remoteChanges).toEqual([{ path: "remote-only.md", type: "create" }]);
+		expect(result.cacheEntries["shared.md"]).toBeDefined();
+		expect(result.cacheEntries["shared.md"].remoteSha).toBe("sha-remote");
+		expect(result.cacheEntries["shared.md"].localContentHash).toBe("abc123");
+		expect(getRemoteFileHash).toHaveBeenCalledWith("shared.md");
+	});
+
+	it("keeps files with different content in change lists", async () => {
+		const localChanges: FileChange[] = [{ path: "diff.md", type: "create" }];
+		const remoteChanges: FileChange[] = [{ path: "diff.md", type: "create" }];
+		const localFiles: LocalFileInfo[] = [{ path: "diff.md", contentHash: "local-hash", size: 10 }];
+
+		const getRemoteFileHash = vi.fn().mockResolvedValue({
+			contentHash: "remote-hash",
+			remoteSha: "sha-remote",
+			size: 15,
+			isBinary: false,
+		});
+
+		const result = await reconcileFirstSync(
+			localChanges,
+			remoteChanges,
+			localFiles,
+			getRemoteFileHash,
+		);
+
+		expect(result.localChanges).toEqual([{ path: "diff.md", type: "create" }]);
+		expect(result.remoteChanges).toEqual([{ path: "diff.md", type: "create" }]);
+		expect(result.cacheEntries).toEqual({});
+	});
+
+	it("handles mix of identical and different overlapping files", async () => {
+		const localChanges: FileChange[] = [
+			{ path: "same.md", type: "create" },
+			{ path: "diff.md", type: "create" },
+			{ path: "local-only.md", type: "create" },
+		];
+		const remoteChanges: FileChange[] = [
+			{ path: "same.md", type: "create" },
+			{ path: "diff.md", type: "create" },
+			{ path: "remote-only.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [
+			{ path: "same.md", contentHash: "hash-same", size: 10 },
+			{ path: "diff.md", contentHash: "hash-local", size: 20 },
+			{ path: "local-only.md", contentHash: "hash-lo", size: 5 },
+		];
+
+		const getRemoteFileHash = vi.fn().mockImplementation(async (path: string) => {
+			if (path === "same.md") {
+				return { contentHash: "hash-same", remoteSha: "sha-same", size: 10, isBinary: false };
+			}
+			return { contentHash: "hash-remote", remoteSha: "sha-diff", size: 25, isBinary: false };
+		});
+
+		const result = await reconcileFirstSync(
+			localChanges,
+			remoteChanges,
+			localFiles,
+			getRemoteFileHash,
+		);
+
+		expect(result.localChanges).toHaveLength(2);
+		expect(result.localChanges.map((c) => c.path)).toContain("diff.md");
+		expect(result.localChanges.map((c) => c.path)).toContain("local-only.md");
+		expect(result.remoteChanges).toHaveLength(2);
+		expect(result.remoteChanges.map((c) => c.path)).toContain("diff.md");
+		expect(result.remoteChanges.map((c) => c.path)).toContain("remote-only.md");
+		expect(Object.keys(result.cacheEntries)).toEqual(["same.md"]);
+	});
+
+	it("returns unchanged lists when no overlapping files", async () => {
+		const localChanges: FileChange[] = [{ path: "a.md", type: "create" }];
+		const remoteChanges: FileChange[] = [{ path: "b.md", type: "create" }];
+		const localFiles: LocalFileInfo[] = [{ path: "a.md", contentHash: "h", size: 5 }];
+
+		const getRemoteFileHash = vi.fn();
+
+		const result = await reconcileFirstSync(
+			localChanges,
+			remoteChanges,
+			localFiles,
+			getRemoteFileHash,
+		);
+
+		expect(result.localChanges).toEqual(localChanges);
+		expect(result.remoteChanges).toEqual(remoteChanges);
+		expect(result.cacheEntries).toEqual({});
+		expect(getRemoteFileHash).not.toHaveBeenCalled();
+	});
+
+	it("only calls getRemoteFileHash for overlapping files", async () => {
+		const localChanges: FileChange[] = [
+			{ path: "shared.md", type: "create" },
+			{ path: "local.md", type: "create" },
+		];
+		const remoteChanges: FileChange[] = [
+			{ path: "shared.md", type: "create" },
+			{ path: "remote.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [
+			{ path: "shared.md", contentHash: "h", size: 5 },
+			{ path: "local.md", contentHash: "h2", size: 5 },
+		];
+
+		const getRemoteFileHash = vi.fn().mockResolvedValue({
+			contentHash: "h",
+			remoteSha: "sha",
+			size: 5,
+			isBinary: false,
+		});
+
+		await reconcileFirstSync(localChanges, remoteChanges, localFiles, getRemoteFileHash);
+
+		expect(getRemoteFileHash).toHaveBeenCalledTimes(1);
+		expect(getRemoteFileHash).toHaveBeenCalledWith("shared.md");
 	});
 });

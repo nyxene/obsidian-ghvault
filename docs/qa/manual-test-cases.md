@@ -323,6 +323,30 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Click "Conflict strategy" dropdown
 **Expected:** Four options: Skip, Local wins, Remote wins, Ask
 
+### TC-CONF-013: First sync — identical files on both sides
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Fresh plugin install (no sync state), vault has `note.md`, repo has `note.md` with same content
+**Steps:**
+1. Sync
+**Expected:** No conflicts. File is cached. No pull or push for `note.md`. Other unique files sync normally.
+
+### TC-CONF-014: First sync — different files on both sides
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Fresh plugin install, vault has `note.md` with "local", repo has `note.md` with "remote"
+**Steps:**
+1. Sync
+**Expected:** `note.md` is a conflict. Conflict strategy applies (skip/local-wins/remote-wins/ask).
+
+### TC-CONF-015: First sync — mixed files
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Fresh plugin install. Vault: `shared.md`, `local-only.md`. Repo: `shared.md` (same content), `remote-only.md`
+**Steps:**
+1. Sync
+**Expected:** `shared.md` cached (no conflict). `local-only.md` pushed. `remote-only.md` pulled.
+
 ---
 
 ## Group H: Sync Folder
