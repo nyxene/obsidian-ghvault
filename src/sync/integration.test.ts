@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import type { GitHubGraphQL } from "../github/graphql";
-import type { ConflictStrategy, SHACacheEntry } from "../types";
+import type { ConflictDecision, ConflictInfo, ConflictStrategy, SHACacheEntry } from "../types";
 import { computeGitBlobSha, computeHash, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { ChangeQueue } from "./change-queue";
@@ -180,6 +180,7 @@ function createIntegrationSetup(options: {
 	pushOid?: string;
 	syncFolder?: string;
 	conflictStrategy?: ConflictStrategy;
+	onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
 }): IntegrationSetup {
 	const vault = createMockVaultAdapter(options.localFiles ?? []);
 	const client = createMockGitHubClient(options.remoteFiles ?? [], options.headSha);
@@ -200,6 +201,7 @@ function createIntegrationSetup(options: {
 		logger,
 		commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
 		conflictStrategy: options.conflictStrategy,
+		onConflict: options.onConflict,
 	});
 
 	return { engine, vault, client, graphql, state, storage };
@@ -544,6 +546,54 @@ describe("Sync integration", () => {
 			expect(vault.files.get("conflict.md")).toBe("remote version");
 			expect(result.pull.modified).toContain("conflict.md");
 			// Local version should NOT be pushed
+			expect(result.push).toBeNull();
+		});
+
+		it("ask strategy applies per-file decisions from callback", async () => {
+			const onConflict = vi.fn().mockResolvedValue([{ path: "conflict.md", resolution: "local" }]);
+
+			const { engine, vault, graphql, storage } = createIntegrationSetup({
+				localFiles: [{ path: "conflict.md", content: "local version" }],
+				remoteFiles: [
+					{ path: "conflict.md", sha: "sha-remote-v2", content: "remote version", size: 14 },
+				],
+				conflictStrategy: "ask",
+				onConflict,
+			});
+
+			storage.data = JSON.parse(JSON.stringify(conflictCache));
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.resolvedCount).toBe(1);
+			expect(onConflict).toHaveBeenCalled();
+			// Local version should NOT be overwritten
+			expect(vault.files.get("conflict.md")).toBe("local version");
+			// Local version should be pushed
+			expect(graphql.createCommit).toHaveBeenCalled();
+		});
+
+		it("ask strategy with skip-all keeps both sides untouched", async () => {
+			const onConflict = vi.fn().mockResolvedValue([]);
+
+			const { engine, vault, storage } = createIntegrationSetup({
+				localFiles: [{ path: "conflict.md", content: "local version" }],
+				remoteFiles: [
+					{ path: "conflict.md", sha: "sha-remote-v2", content: "remote version", size: 14 },
+				],
+				conflictStrategy: "ask",
+				onConflict,
+			});
+
+			storage.data = JSON.parse(JSON.stringify(conflictCache));
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.resolvedCount).toBe(0);
+			// Both sides untouched
+			expect(vault.files.get("conflict.md")).toBe("local version");
 			expect(result.push).toBeNull();
 		});
 	});

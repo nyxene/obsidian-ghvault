@@ -283,6 +283,46 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 3. Sync
 **Expected:** Local file deleted (matches remote state)
 
+### TC-CONF-009: Ask strategy — resolve per-file
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Ask", two files synced (`a.md`, `b.md`)
+**Steps:**
+1. Edit both files locally and remotely
+2. Sync
+3. Modal appears listing both conflicts
+4. Choose "Keep Local" for `a.md`, "Keep Remote" for `b.md`
+5. Click "Resolve"
+**Expected:** `a.md` = local version pushed to GitHub, `b.md` = remote version pulled to vault. Notice shows "2 resolved (per-file)"
+
+### TC-CONF-010: Ask strategy — Skip All
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Ask", one file synced
+**Steps:**
+1. Create a conflict
+2. Sync — modal appears
+3. Click "Skip All"
+**Expected:** Both sides untouched. Notice shows "1 conflict"
+
+### TC-CONF-011: Ask strategy — close modal without choosing
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Ask"
+**Steps:**
+1. Create a conflict
+2. Sync — modal appears
+3. Close modal (Escape or X)
+**Expected:** Same as Skip All — both sides untouched
+
+### TC-CONF-012: Settings dropdown shows 4 strategies
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open GHVault settings
+2. Click "Conflict strategy" dropdown
+**Expected:** Four options: Skip, Local wins, Remote wins, Ask
+
 ---
 
 ## Group H: Sync Folder

@@ -278,6 +278,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						skip: "Skip",
 						"local-wins": "Local wins",
 						"remote-wins": "Remote wins",
+						ask: "Ask",
 					})
 					.setValue(this.settings.conflictStrategy)
 					.onChange(async (value) => {

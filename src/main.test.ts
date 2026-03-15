@@ -22,6 +22,28 @@ vi.mock("obsidian", async (importOriginal) => {
 				noticeLog.push({ message });
 			}
 		},
+		Modal: class Modal {
+			app: unknown;
+			contentEl = {
+				empty: vi.fn(),
+				addClass: vi.fn(),
+				createEl: vi.fn().mockReturnValue({
+					createEl: vi.fn().mockReturnValue({
+						createEl: vi.fn().mockReturnValue({
+							createEl: vi.fn(),
+							addEventListener: vi.fn(),
+						}),
+						addEventListener: vi.fn(),
+					}),
+					addEventListener: vi.fn(),
+				}),
+			};
+			constructor(app: unknown) {
+				this.app = app;
+			}
+			open(): void {}
+			close(): void {}
+		},
 	};
 });
 
@@ -53,6 +75,7 @@ const mockSync = vi.fn().mockResolvedValue({
 	pull: { created: [], modified: [], deleted: [], errors: [] },
 	push: null,
 	conflicts: [],
+	resolvedCount: 0,
 });
 
 let mockIsSyncing = false;
@@ -88,6 +111,16 @@ vi.mock("./sync/state", () => ({
 
 vi.mock("./sync/vault-adapter", () => ({
 	ObsidianVaultAdapter: class MockObsidianVaultAdapter {},
+}));
+
+const mockWaitForDecisions = vi.fn().mockResolvedValue([]);
+const mockModalOpen = vi.fn();
+
+vi.mock("./ui/conflict-modal", () => ({
+	ConflictModal: class MockConflictModal {
+		open = mockModalOpen;
+		waitForDecisions = mockWaitForDecisions;
+	},
 }));
 
 let capturedChangeQueueOnReady: (() => void) | null = null;
@@ -306,6 +339,7 @@ describe("GHVaultPlugin", () => {
 			pull: { created: [], modified: [], deleted: [], errors: [] },
 			push: null,
 			conflicts: [],
+			resolvedCount: 0,
 		});
 		mockIsSyncing = false;
 		mockGetRepoInfo.mockReset();
@@ -540,6 +574,7 @@ describe("GHVaultPlugin", () => {
 				pull: { created: ["a.md"], modified: ["b.md"], deleted: [], errors: [] },
 				push: { pushed: ["c.md"], deleted: [] },
 				conflicts: [],
+				resolvedCount: 0,
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -557,6 +592,7 @@ describe("GHVaultPlugin", () => {
 					{ path: "c.md", localChange: "modify", remoteChange: "modify" },
 					{ path: "d.md", localChange: "modify", remoteChange: "delete" },
 				],
+				resolvedCount: 0,
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -571,6 +607,7 @@ describe("GHVaultPlugin", () => {
 				pull: { created: [], modified: [], deleted: [], errors: [] },
 				push: null,
 				conflicts: [{ path: "x.md", localChange: "modify", remoteChange: "modify" }],
+				resolvedCount: 0,
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -585,6 +622,7 @@ describe("GHVaultPlugin", () => {
 				pull: { created: [], modified: [], deleted: [], errors: [] },
 				push: { pushed: ["conflict.md"], deleted: [] },
 				conflicts: [{ path: "conflict.md", localChange: "modify", remoteChange: "modify" }],
+				resolvedCount: 1,
 			});
 
 			const { plugin } = await loadPlugin({
@@ -609,6 +647,7 @@ describe("GHVaultPlugin", () => {
 					{ path: "a.md", localChange: "modify", remoteChange: "modify" },
 					{ path: "b.md", localChange: "modify", remoteChange: "delete" },
 				],
+				resolvedCount: 2,
 			});
 
 			const { plugin } = await loadPlugin({
@@ -623,6 +662,51 @@ describe("GHVaultPlugin", () => {
 			expect(lastNotice().message).toBe(
 				"GHVault: Synced — 1 pulled, 0 pushed, 2 resolved (remote wins)",
 			);
+		});
+
+		it("shows 'resolved (per-file)' for ask strategy with resolved conflicts", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: ["b.md"], deleted: [], errors: [] },
+				push: { pushed: ["a.md"], deleted: [] },
+				conflicts: [
+					{ path: "a.md", localChange: "modify", remoteChange: "modify" },
+					{ path: "b.md", localChange: "modify", remoteChange: "modify" },
+				],
+				resolvedCount: 2,
+			});
+
+			const { plugin } = await loadPlugin({
+				settings: {
+					...CONFIGURED_SETTINGS.settings,
+					conflictStrategy: "ask",
+				},
+			});
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe(
+				"GHVault: Synced — 1 pulled, 1 pushed, 2 resolved (per-file)",
+			);
+		});
+
+		it("shows 'conflicts' for ask strategy when user skips all", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: null,
+				conflicts: [{ path: "x.md", localChange: "modify", remoteChange: "modify" }],
+				resolvedCount: 0,
+			});
+
+			const { plugin } = await loadPlugin({
+				settings: {
+					...CONFIGURED_SETTINGS.settings,
+					conflictStrategy: "ask",
+				},
+			});
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Synced — 0 pulled, 0 pushed, 1 conflict");
 		});
 	});
 
@@ -909,6 +993,13 @@ describe("GHVaultPlugin", () => {
 				settings: { conflictStrategy: "local-wins" },
 			});
 			expect(plugin.settings.conflictStrategy).toBe("local-wins");
+		});
+
+		it("loadSettings parses ask conflictStrategy", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { conflictStrategy: "ask" },
+			});
+			expect(plugin.settings.conflictStrategy).toBe("ask");
 		});
 
 		it("loadSettings defaults conflictStrategy for invalid value", async () => {
@@ -1271,6 +1362,7 @@ describe("GHVaultPlugin", () => {
 				pull: { created: ["a.md"], modified: [], deleted: [], errors: [] },
 				push: null,
 				conflicts: [],
+				resolvedCount: 0,
 			});
 
 			// Wait for runSync to complete — no throw expected

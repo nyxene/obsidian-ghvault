@@ -18,7 +18,7 @@ Most Obsidian-to-GitHub solutions wrap the `git` CLI, which means they only work
 | Git CLI required | No | Yes |
 | Commit signing | Automatic (GPG via GitHub) | Manual setup |
 | Setup complexity | Token + repo name | Git install + SSH keys + config |
-| Conflict handling | Skip & report | Merge conflicts (manual resolution) |
+| Conflict handling | Per-file resolution (skip, local/remote wins, or interactive) | Merge conflicts (manual resolution) |
 
 If you want simple, reliable vault backup to GitHub that works the same on every device — GHVault is for you.
 
@@ -29,7 +29,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Remote pull check** — periodically checks for remote changes and pulls them automatically, with adaptive backoff when idle
 - **Mobile-first** — works on iOS, Android, and desktop equally
 - **No git CLI** — uses GitHub REST API for reads and GraphQL `createCommitOnBranch` for writes
-- **Conflict resolution** — configurable strategy for files changed on both sides: skip (default), local-wins, or remote-wins
+- **Conflict resolution** — configurable strategy for files changed on both sides: skip (default), local-wins, remote-wins, or ask (interactive per-file modal)
 - **Automatic GPG signing** — commits made via GraphQL are signed by GitHub automatically
 - **Rate limit aware** — tracks GitHub API rate limits and pauses before hitting them
 - **SHA integrity checks** — verifies downloaded file content matches GitHub's reported SHA
@@ -85,7 +85,7 @@ Open Obsidian Settings → GHVault and fill in:
 | **Auto-sync** | Automatically sync when vault files change (default: off) |
 | **Auto-sync debounce** | Seconds to wait after last change before syncing (1–300, default: 10) |
 | **Remote pull interval** | Base interval in seconds to check for remote changes (30–3600, default: 300). Backs off automatically when idle. |
-| **Conflict strategy** | How to handle files changed on both sides: `skip` (default), `local-wins`, or `remote-wins` |
+| **Conflict strategy** | How to handle files changed on both sides: `skip` (default), `local-wins`, `remote-wins`, or `ask` (per-file modal) |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
 
 Use the **Test Connection** button to verify your settings before syncing.
@@ -112,7 +112,7 @@ The status bar shows the current state:
 ### Sync cycle
 
 1. **Pull**: fetch the latest commit and tree from GitHub, compare with local cache, download changed files
-2. **Conflict check**: detect files changed on both sides — skip them, report to user
+2. **Conflict check**: detect files changed on both sides — resolve based on chosen strategy
 3. **Push**: collect local changes, batch them into a single GraphQL commit
 
 ### API usage
@@ -141,6 +141,7 @@ When the same file is changed both locally and on GitHub between syncs, GHVault 
 | **Skip** (default) | Skip the file on both sides — neither version is overwritten |
 | **Local wins** | Push the local version to GitHub, overwriting the remote |
 | **Remote wins** | Pull the remote version to the vault, overwriting the local |
+| **Ask** | Show a modal listing each conflict — choose "Keep Local" or "Keep Remote" per file |
 
 The number of conflicts (or resolved files) is shown in the sync Notice.
 
@@ -148,7 +149,7 @@ The number of conflicts (or resolved files) is shown in the sync Notice.
 
 - **No offline sync** — requires an internet connection. Changes are queued locally but not synced until online.
 - **File size limits** — files over 50MB are skipped (GitHub API limit). Files over 1.5MB use a slower upload path due to GraphQL payload limits.
-- **No merge** — conflicting files are skipped, not merged. You need to resolve conflicts manually by choosing one version.
+- **No merge** — conflicting files are resolved by choosing one version (local or remote), not by merging content.
 - **API rate limits** — GitHub allows 5,000 REST requests/hour and 5,000 GraphQL points/hour. Large vaults with thousands of files may hit limits during initial sync.
 - **Single branch** — syncs with one branch at a time. No multi-branch workflows.
 - **No real-time sync** — remote changes are detected via periodic polling (not webhooks/websockets). The default check interval is 5 minutes, with adaptive backoff when idle.
