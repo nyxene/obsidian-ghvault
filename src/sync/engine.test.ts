@@ -31,6 +31,7 @@ function createMockState(cache: Record<string, unknown> = {}): SyncStateManager 
 		getAllSHAs: vi.fn().mockReturnValue(cache),
 		getHeadOid: vi.fn().mockReturnValue("head"),
 		load: vi.fn().mockResolvedValue(undefined),
+		setSHABatch: vi.fn(),
 	} as unknown as SyncStateManager;
 }
 
@@ -636,6 +637,95 @@ describe("SyncEngine", () => {
 			});
 			const localResult = await localEngine.sync();
 			expect(localResult.resolvedCount).toBe(1);
+		});
+	});
+
+	describe("first sync merge", () => {
+		it("reconciles identical files on first sync (empty cache + empty headOid)", async () => {
+			// Remote has file with same content as local
+			const remoteChanges: FileChange[] = [{ path: "shared.md", type: "create" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+			// Mock getRemoteFileHash to return same hash as local file
+			(pullEngine as unknown as Record<string, unknown>).getRemoteFileHash = vi
+				.fn()
+				.mockResolvedValue({
+					contentHash: "same-hash",
+					remoteSha: "sha-remote",
+					size: 10,
+					isBinary: false,
+				});
+
+			const vault = createMockVault([{ path: "shared.md", contentHash: "same-hash", size: 10 }]);
+			// Empty cache + empty headOid = first sync
+			const state = createMockState({});
+			(state.getHeadOid as ReturnType<typeof vi.fn>).mockReturnValue("");
+
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			// Identical file should NOT be a conflict
+			expect(result.conflicts).toHaveLength(0);
+			// Should not push or pull the shared file
+			expect(pushEngine.push).not.toHaveBeenCalled();
+			// Cache should be pre-populated (setSHABatch called)
+			expect(state.setSHABatch).toHaveBeenCalled();
+		});
+
+		it("treats different-content files as conflicts on first sync", async () => {
+			const remoteChanges: FileChange[] = [{ path: "diff.md", type: "create" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+			(pullEngine as unknown as Record<string, unknown>).getRemoteFileHash = vi
+				.fn()
+				.mockResolvedValue({
+					contentHash: "remote-hash",
+					remoteSha: "sha-remote",
+					size: 10,
+					isBinary: false,
+				});
+
+			const vault = createMockVault([{ path: "diff.md", contentHash: "local-hash", size: 10 }]);
+			const state = createMockState({});
+			(state.getHeadOid as ReturnType<typeof vi.fn>).mockReturnValue("");
+
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			// Different content → conflict
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.conflicts[0].path).toBe("diff.md");
+		});
+
+		it("does not reconcile when cache is not empty (not first sync)", async () => {
+			const remoteChanges: FileChange[] = [{ path: "file.md", type: "create" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+			(pullEngine as unknown as Record<string, unknown>).getRemoteFileHash = vi.fn();
+
+			const vault = createMockVault([{ path: "file.md", contentHash: "hash", size: 10 }]);
+			// Non-empty cache → not first sync
+			const state = createMockState({
+				"other.md": {
+					remoteSha: "sha",
+					localContentHash: "h",
+					lastSyncedAt: 1000,
+					size: 5,
+					isBinary: false,
+				},
+			});
+			(state.getHeadOid as ReturnType<typeof vi.fn>).mockReturnValue("");
+
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			await engine.sync();
+
+			// Should NOT call getRemoteFileHash (not first sync)
+			expect(
+				(pullEngine as unknown as Record<string, unknown>).getRemoteFileHash,
+			).not.toHaveBeenCalled();
 		});
 	});
 });

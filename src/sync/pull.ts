@@ -259,6 +259,18 @@ export class PullEngine {
 		return result;
 	}
 
+	async getRemoteFileHash(
+		branch: string,
+		vaultPath: string,
+	): Promise<{ contentHash: string; remoteSha: string; size: number; isBinary: boolean }> {
+		const repoPath = toRepoPath(vaultPath, this.syncFolder);
+		const file = await this.client.getFileContent(repoPath, branch);
+		const rawBytes = decodeBase64ToBytes(file.content);
+		const isBinary = hasBinaryContent(rawBytes);
+		const contentHash = await computeHashFromBuffer(rawBytes);
+		return { contentHash, remoteSha: file.sha, size: file.size, isBinary };
+	}
+
 	async updateCacheFromCommit(commitOid: string): Promise<void> {
 		const commit = await this.client.getCommit(commitOid);
 		let entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];

@@ -1,7 +1,7 @@
 import type { ConflictDecision, ConflictInfo, ConflictStrategy } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
-import { computeLocalChanges, detectConflicts } from "./comparator";
+import { computeLocalChanges, detectConflicts, reconcileFirstSync } from "./comparator";
 import type { PullEngine, PullResult } from "./pull";
 import type { PushCommitOptions, PushEngine, PushResult } from "./push";
 import type { SyncStateManager } from "./state";
@@ -81,10 +81,31 @@ export class SyncEngine {
 		// Compute local changes BEFORE pull to enable conflict detection
 		const localFiles = await this.vault.listFiles();
 		const cache = this.state.getAllSHAs();
-		const localChanges = computeLocalChanges(localFiles, cache);
+		let localChanges = computeLocalChanges(localFiles, cache);
 
 		// Get remote changes without applying them
-		const remoteChanges = await this.pullEngine.getRemoteChanges(this.commitOptions.branch);
+		let remoteChanges = await this.pullEngine.getRemoteChanges(this.commitOptions.branch);
+
+		// First sync: reconcile overlapping files by comparing content hashes
+		const isFirstSync = this.state.getHeadOid() === "" && Object.keys(cache).length === 0;
+		if (isFirstSync && localChanges.length > 0 && remoteChanges.length > 0) {
+			this.logger.info("First sync with non-empty vault and repo — reconciling");
+			const reconciliation = await reconcileFirstSync(
+				localChanges,
+				remoteChanges,
+				localFiles,
+				(path) => this.pullEngine.getRemoteFileHash(this.commitOptions.branch, path),
+			);
+			localChanges = reconciliation.localChanges;
+			remoteChanges = reconciliation.remoteChanges;
+
+			// Pre-populate cache for identical files
+			const identicalCount = Object.keys(reconciliation.cacheEntries).length;
+			if (identicalCount > 0) {
+				this.state.setSHABatch(reconciliation.cacheEntries);
+				this.logger.info("First sync: identical files cached", { count: identicalCount });
+			}
+		}
 
 		// Detect conflicts: files changed both locally and remotely
 		const conflicts = detectConflicts(localChanges, remoteChanges);

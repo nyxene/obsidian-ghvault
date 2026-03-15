@@ -79,6 +79,72 @@ export function computeRemoteChanges(
 	return changes;
 }
 
+export interface RemoteFileHash {
+	contentHash: string;
+	remoteSha: string;
+	size: number;
+	isBinary: boolean;
+}
+
+export interface FirstSyncReconciliation {
+	localChanges: FileChange[];
+	remoteChanges: FileChange[];
+	cacheEntries: Record<string, SHACacheEntry>;
+}
+
+/**
+ * On first sync (empty cache), files existing on both sides are all detected as
+ * "create" changes, which `detectConflicts` would mark as conflicts. This function
+ * compares content hashes for overlapping files:
+ * - Identical content → remove from both change lists, add to cache
+ * - Different content → leave as-is (will become a conflict)
+ */
+export async function reconcileFirstSync(
+	localChanges: FileChange[],
+	remoteChanges: FileChange[],
+	localFiles: LocalFileInfo[],
+	getRemoteFileHash: (path: string) => Promise<RemoteFileHash>,
+): Promise<FirstSyncReconciliation> {
+	const localByPath = new Map(localChanges.map((c) => [c.path, c]));
+	const remoteByPath = new Map(remoteChanges.map((c) => [c.path, c]));
+	const localFileByPath = new Map(localFiles.map((f) => [f.path, f]));
+
+	// Find paths that appear in both change lists
+	const overlapping: string[] = [];
+	for (const path of localByPath.keys()) {
+		if (remoteByPath.has(path)) {
+			overlapping.push(path);
+		}
+	}
+
+	const identicalPaths = new Set<string>();
+	const cacheEntries: Record<string, SHACacheEntry> = {};
+
+	for (const path of overlapping) {
+		const localFile = localFileByPath.get(path);
+		if (!localFile) continue;
+
+		const remote = await getRemoteFileHash(path);
+
+		if (localFile.contentHash === remote.contentHash) {
+			identicalPaths.add(path);
+			cacheEntries[path] = {
+				remoteSha: remote.remoteSha,
+				localContentHash: localFile.contentHash,
+				lastSyncedAt: Date.now(),
+				size: remote.size,
+				isBinary: remote.isBinary,
+			};
+		}
+	}
+
+	return {
+		localChanges: localChanges.filter((c) => !identicalPaths.has(c.path)),
+		remoteChanges: remoteChanges.filter((c) => !identicalPaths.has(c.path)),
+		cacheEntries,
+	};
+}
+
 /**
  * Detect conflicts: files that appear in both local and remote change sets.
  * Returns the list of conflicted paths so they can be skipped in both pull and push.
