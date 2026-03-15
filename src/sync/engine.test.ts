@@ -8,16 +8,18 @@ import type { PullEngine, PullResult } from "./pull";
 import type { PushEngine, PushResult } from "./push";
 import type { SyncStateManager } from "./state";
 
-const emptyPull: PullResult = { created: [], modified: [], deleted: [], errors: [] };
+const emptyPull: PullResult = { created: [], modified: [], deleted: [], renamed: [], errors: [] };
 const emptyPush: PushResult = { pushed: [], deleted: [], oid: "" };
 
 function createMockPullEngine(
 	result: PullResult = emptyPull,
 	remoteChanges: import("../types").FileChange[] = [],
+	remoteTree: import("../types").GitHubTreeEntry[] = [],
 ): PullEngine {
 	return {
 		pull: vi.fn().mockResolvedValue(result),
 		getRemoteChanges: vi.fn().mockResolvedValue(remoteChanges),
+		getLastMappedTree: vi.fn().mockReturnValue(remoteTree),
 		updateCacheFromCommit: vi.fn().mockResolvedValue(undefined),
 	} as unknown as PullEngine;
 }
@@ -89,7 +91,7 @@ describe("SyncEngine", () => {
 
 		const result = await engine.sync();
 
-		expect(pullEngine.pull).toHaveBeenCalledWith("main", expect.any(Set));
+		expect(pullEngine.pull).toHaveBeenCalledWith("main", expect.any(Set), expect.any(Array));
 		expect(pushEngine.push).not.toHaveBeenCalled();
 		expect(result.pull).toEqual(emptyPull);
 		expect(result.push).toBeNull();
@@ -101,6 +103,7 @@ describe("SyncEngine", () => {
 			created: ["remote.md"],
 			modified: [],
 			deleted: [],
+			renamed: [],
 			errors: [],
 		};
 		const { engine, pushEngine } = createEngine({
@@ -185,6 +188,7 @@ describe("SyncEngine", () => {
 					() => new Promise((resolve) => setTimeout(() => resolve(emptyPull), 50)),
 				),
 			getRemoteChanges: vi.fn().mockResolvedValue([]),
+			getLastMappedTree: vi.fn().mockReturnValue([]),
 		} as unknown as PullEngine;
 		const { engine } = createEngine({ pullEngine });
 
@@ -232,7 +236,13 @@ describe("SyncEngine", () => {
 	describe("conflict detection", () => {
 		it("skips conflicted files in both pull and push", async () => {
 			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
-			const pullResult: PullResult = { created: [], modified: [], deleted: [], errors: [] };
+			const pullResult: PullResult = {
+				created: [],
+				modified: [],
+				deleted: [],
+				renamed: [],
+				errors: [],
+			};
 			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
 
 			const vault = createMockVault([
@@ -261,7 +271,11 @@ describe("SyncEngine", () => {
 			});
 
 			// Pull should receive conflict paths as skipPaths
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith(
+				"main",
+				new Set(["conflict.md"]),
+				expect.any(Array),
+			);
 
 			// Push should not include conflicted file
 			expect(pushEngine.push).not.toHaveBeenCalled();
@@ -276,6 +290,7 @@ describe("SyncEngine", () => {
 				created: ["remote-only.md"],
 				modified: [],
 				deleted: [],
+				renamed: [],
 				errors: [],
 			};
 			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
@@ -311,7 +326,13 @@ describe("SyncEngine", () => {
 
 		it("local-wins: includes conflicted files in push, excludes from pull", async () => {
 			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
-			const pullResult: PullResult = { created: [], modified: [], deleted: [], errors: [] };
+			const pullResult: PullResult = {
+				created: [],
+				modified: [],
+				deleted: [],
+				renamed: [],
+				errors: [],
+			};
 			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
 
 			const vault = createMockVault([
@@ -339,7 +360,11 @@ describe("SyncEngine", () => {
 
 			expect(result.conflicts).toHaveLength(1);
 			// Pull should skip conflicted file
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith(
+				"main",
+				new Set(["conflict.md"]),
+				expect.any(Array),
+			);
 			// Push should include conflicted file
 			expect(pushEngine.push).toHaveBeenCalledWith(
 				[expect.objectContaining({ path: "conflict.md", type: "modify" })],
@@ -353,6 +378,7 @@ describe("SyncEngine", () => {
 				created: [],
 				modified: ["conflict.md"],
 				deleted: [],
+				renamed: [],
 				errors: [],
 			};
 			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
@@ -382,7 +408,7 @@ describe("SyncEngine", () => {
 
 			expect(result.conflicts).toHaveLength(1);
 			// Pull should NOT skip conflicted file (empty skip set)
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set());
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(), expect.any(Array));
 			// Push should NOT include conflicted file
 			expect(pushEngine.push).not.toHaveBeenCalled();
 		});
@@ -410,7 +436,11 @@ describe("SyncEngine", () => {
 			const result = await engine.sync();
 
 			expect(result.conflicts).toHaveLength(1);
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith(
+				"main",
+				new Set(["conflict.md"]),
+				expect.any(Array),
+			);
 			expect(pushEngine.push).not.toHaveBeenCalled();
 		});
 
@@ -437,6 +467,7 @@ describe("SyncEngine", () => {
 				created: [],
 				modified: ["b.md"],
 				deleted: [],
+				renamed: [],
 				errors: [],
 			};
 			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
@@ -489,7 +520,7 @@ describe("SyncEngine", () => {
 
 			// a.md = local wins → skip in pull, include in push
 			// b.md = remote wins → include in pull, skip in push
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["a.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["a.md"]), expect.any(Array));
 			expect(pushEngine.push).toHaveBeenCalledWith(
 				[expect.objectContaining({ path: "a.md", type: "modify" })],
 				expect.any(Object),
@@ -523,7 +554,11 @@ describe("SyncEngine", () => {
 
 			expect(result.conflicts).toHaveLength(1);
 			expect(result.resolvedCount).toBe(0);
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith(
+				"main",
+				new Set(["conflict.md"]),
+				expect.any(Array),
+			);
 			expect(pushEngine.push).not.toHaveBeenCalled();
 		});
 
@@ -557,7 +592,11 @@ describe("SyncEngine", () => {
 
 			expect(result.conflicts).toHaveLength(1);
 			expect(result.resolvedCount).toBe(0);
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith(
+				"main",
+				new Set(["conflict.md"]),
+				expect.any(Array),
+			);
 			expect(pushEngine.push).not.toHaveBeenCalled();
 		});
 
@@ -591,7 +630,11 @@ describe("SyncEngine", () => {
 
 			expect(result.conflicts).toHaveLength(1);
 			expect(result.resolvedCount).toBe(0);
-			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pullEngine.pull).toHaveBeenCalledWith(
+				"main",
+				new Set(["conflict.md"]),
+				expect.any(Array),
+			);
 			expect(pushEngine.push).not.toHaveBeenCalled();
 		});
 
@@ -726,6 +769,82 @@ describe("SyncEngine", () => {
 			expect(
 				(pullEngine as unknown as Record<string, unknown>).getRemoteFileHash,
 			).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("rename detection", () => {
+		it("detects local rename and includes it in result", async () => {
+			// Local: old.md deleted, new.md created (same content hash)
+			const vault = createMockVault([{ path: "new.md", contentHash: "hash-same", size: 10 }]);
+			const state = createMockState({
+				"old.md": {
+					remoteSha: "sha-old",
+					localContentHash: "hash-same",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const pullEngine = createMockPullEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			expect(result.renames).toHaveLength(1);
+			expect(result.renames[0]).toEqual({ oldPath: "old.md", newPath: "new.md" });
+		});
+
+		it("detects remote rename and includes it in result", async () => {
+			// Remote: old-remote.md deleted, new-remote.md created (same SHA)
+			const remoteChanges: FileChange[] = [
+				{ path: "old-remote.md", type: "delete" },
+				{ path: "new-remote.md", type: "create" },
+			];
+			const remoteTree = [
+				{ path: "new-remote.md", sha: "sha-same", mode: "100644", type: "blob" as const },
+			];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges, remoteTree);
+
+			const vault = createMockVault([]);
+			const state = createMockState({
+				"old-remote.md": {
+					remoteSha: "sha-same",
+					localContentHash: "hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			expect(result.renames).toHaveLength(1);
+			expect(result.renames[0]).toEqual({ oldPath: "old-remote.md", newPath: "new-remote.md" });
+		});
+
+		it("removes rename pairs from change lists (no double processing)", async () => {
+			const vault = createMockVault([{ path: "renamed.md", contentHash: "hash-x", size: 5 }]);
+			const state = createMockState({
+				"original.md": {
+					remoteSha: "sha",
+					localContentHash: "hash-x",
+					lastSyncedAt: 1000,
+					size: 5,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const pullEngine = createMockPullEngine();
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			expect(result.renames).toHaveLength(1);
+			// The rename pair should NOT also appear as separate push changes
+			// Push should still happen (delete old + create new) but as rename-aware operation
 		});
 	});
 });

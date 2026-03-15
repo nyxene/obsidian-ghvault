@@ -1,5 +1,5 @@
 import type { GitHubClient } from "../github/client";
-import type { FileChange, GitHubRef, SHACacheEntry } from "../types";
+import type { FileChange, GitHubRef, RenameInfo, SHACacheEntry } from "../types";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { hasBinaryContent, toSafeArrayBuffer } from "../utils/binary";
 import { pMap } from "../utils/concurrency";
@@ -13,12 +13,14 @@ export interface VaultAdapter {
 	writeFile(path: string, content: string): Promise<void>;
 	writeFileBinary(path: string, data: ArrayBuffer): Promise<void>;
 	deleteFile(path: string): Promise<void>;
+	renameFile(oldPath: string, newPath: string): Promise<void>;
 }
 
 export interface PullResult {
 	created: string[];
 	modified: string[];
 	deleted: string[];
+	renamed: RenameInfo[];
 	errors: Array<{ path: string; error: string }>;
 }
 
@@ -48,6 +50,12 @@ export class PullEngine {
 		this.syncFolder = options.syncFolder;
 	}
 
+	private lastMappedTree: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+
+	getLastMappedTree(): Readonly<Awaited<ReturnType<GitHubClient["getTree"]>>["entries"]> {
+		return this.lastMappedTree;
+	}
+
 	async getRemoteChanges(branch: string): Promise<FileChange[]> {
 		let ref: GitHubRef;
 		try {
@@ -70,13 +78,18 @@ export class PullEngine {
 
 		// Map repo paths to vault paths, filtering out files outside syncFolder
 		const mappedEntries = this.mapTreeToVaultPaths(treeEntries);
+		this.lastMappedTree = mappedEntries;
 
 		const cache = this.state.getAllSHAs();
 		return computeRemoteChanges(mappedEntries, cache);
 	}
 
-	async pull(branch: string, skipPaths?: ReadonlySet<string>): Promise<PullResult> {
-		const result: PullResult = { created: [], modified: [], deleted: [], errors: [] };
+	async pull(
+		branch: string,
+		skipPaths?: ReadonlySet<string>,
+		remoteRenames?: readonly RenameInfo[],
+	): Promise<PullResult> {
+		const result: PullResult = { created: [], modified: [], deleted: [], renamed: [], errors: [] };
 
 		this.logger.info("Pull started", { branch });
 
@@ -144,10 +157,48 @@ export class PullEngine {
 
 		this.logger.info("Remote changes detected", { count: changes.length });
 
+		// Handle remote renames: rename local file + update cache (no download)
+		const renamePaths = new Set<string>();
+		if (remoteRenames && remoteRenames.length > 0) {
+			for (const rename of remoteRenames) {
+				try {
+					const oldCache = this.state.getSHA(rename.oldPath);
+					await this.vault.renameFile(rename.oldPath, rename.newPath);
+					this.state.deleteSHA(rename.oldPath);
+					if (oldCache) {
+						const newTreeEntry = mappedEntries.find((e) => e.path === rename.newPath);
+						this.state.setSHA(rename.newPath, {
+							...oldCache,
+							remoteSha: newTreeEntry?.sha ?? oldCache.remoteSha,
+							lastSyncedAt: Date.now(),
+						});
+					}
+					result.renamed.push(rename);
+					renamePaths.add(rename.oldPath);
+					renamePaths.add(rename.newPath);
+					this.logger.info("Remote rename applied", {
+						from: rename.oldPath,
+						to: rename.newPath,
+					});
+				} catch (error: unknown) {
+					const message = error instanceof Error ? error.message : String(error);
+					this.logger.error("Remote rename failed", {
+						from: rename.oldPath,
+						to: rename.newPath,
+						error: message,
+					});
+					result.errors.push({ path: rename.oldPath, error: message });
+				}
+			}
+		}
+
 		// Separate deletes (no HTTP needed) from downloads (create/modify)
 		const downloads: FileChange[] = [];
 		const deletes: FileChange[] = [];
 		for (const change of changes) {
+			// Skip paths already handled by rename
+			if (renamePaths.has(change.path)) continue;
+
 			if (!isSafePath(change.path)) {
 				this.logger.warn("Skipping unsafe path from remote", { path: change.path });
 				result.errors.push({ path: change.path, error: "Unsafe path rejected" });

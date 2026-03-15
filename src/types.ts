@@ -66,6 +66,11 @@ export interface FileChange {
 	sizeHint?: number;
 }
 
+export interface RenameInfo {
+	oldPath: string;
+	newPath: string;
+}
+
 export interface ConflictInfo {
 	path: string;
 	localChange: ChangeType;

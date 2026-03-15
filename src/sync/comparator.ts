@@ -1,4 +1,10 @@
-import type { ConflictInfo, FileChange, GitHubTreeEntry, SHACacheEntry } from "../types";
+import type {
+	ConflictInfo,
+	FileChange,
+	GitHubTreeEntry,
+	RenameInfo,
+	SHACacheEntry,
+} from "../types";
 import { isExcluded } from "../utils/path";
 
 export interface LocalFileInfo {
@@ -90,6 +96,86 @@ export interface FirstSyncReconciliation {
 	localChanges: FileChange[];
 	remoteChanges: FileChange[];
 	cacheEntries: Record<string, SHACacheEntry>;
+}
+
+/**
+ * Detect local renames: a "delete" + "create" pair where the deleted file's
+ * cached content hash matches the created file's local content hash.
+ * Each delete/create path is consumed at most once (first match wins).
+ */
+export function detectLocalRenames(
+	changes: FileChange[],
+	localFiles: LocalFileInfo[],
+	cache: Readonly<Record<string, SHACacheEntry>>,
+): RenameInfo[] {
+	const deletes = changes.filter((c) => c.type === "delete");
+	const creates = changes.filter((c) => c.type === "create");
+	if (deletes.length === 0 || creates.length === 0) return [];
+
+	const localHashByPath = new Map(localFiles.map((f) => [f.path, f.contentHash]));
+	const usedCreates = new Set<string>();
+	const renames: RenameInfo[] = [];
+
+	for (const del of deletes) {
+		const cached = cache[del.path];
+		if (!cached) continue;
+		const deletedHash = cached.localContentHash;
+
+		for (const cre of creates) {
+			if (usedCreates.has(cre.path)) continue;
+			const createdHash = localHashByPath.get(cre.path);
+			if (createdHash === deletedHash) {
+				renames.push({ oldPath: del.path, newPath: cre.path });
+				usedCreates.add(cre.path);
+				break;
+			}
+		}
+	}
+
+	return renames;
+}
+
+/**
+ * Detect remote renames: a "delete" + "create" pair where the deleted file's
+ * cached remote SHA matches the created file's SHA in the remote tree.
+ * Each delete/create path is consumed at most once (first match wins).
+ */
+export function detectRemoteRenames(
+	changes: FileChange[],
+	remoteTree: readonly GitHubTreeEntry[],
+	cache: Readonly<Record<string, SHACacheEntry>>,
+): RenameInfo[] {
+	const deletes = changes.filter((c) => c.type === "delete");
+	const creates = changes.filter((c) => c.type === "create");
+	if (deletes.length === 0 || creates.length === 0) return [];
+
+	const remoteShaByPath = new Map<string, string>();
+	for (const entry of remoteTree) {
+		if (entry.type === "blob") {
+			remoteShaByPath.set(entry.path, entry.sha);
+		}
+	}
+
+	const usedCreates = new Set<string>();
+	const renames: RenameInfo[] = [];
+
+	for (const del of deletes) {
+		const cached = cache[del.path];
+		if (!cached) continue;
+		const deletedSha = cached.remoteSha;
+
+		for (const cre of creates) {
+			if (usedCreates.has(cre.path)) continue;
+			const createdSha = remoteShaByPath.get(cre.path);
+			if (createdSha === deletedSha) {
+				renames.push({ oldPath: del.path, newPath: cre.path });
+				usedCreates.add(cre.path);
+				break;
+			}
+		}
+	}
+
+	return renames;
 }
 
 /**

@@ -5,6 +5,8 @@ import {
 	computeLocalChanges,
 	computeRemoteChanges,
 	detectConflicts,
+	detectLocalRenames,
+	detectRemoteRenames,
 	reconcileFirstSync,
 } from "./comparator";
 
@@ -411,5 +413,161 @@ describe("reconcileFirstSync", () => {
 
 		expect(getRemoteFileHash).toHaveBeenCalledTimes(1);
 		expect(getRemoteFileHash).toHaveBeenCalledWith("shared.md");
+	});
+});
+
+describe("detectLocalRenames", () => {
+	it("detects rename when delete + create have same content hash", () => {
+		const changes: FileChange[] = [
+			{ path: "old-name.md", type: "delete" },
+			{ path: "new-name.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [
+			{ path: "new-name.md", contentHash: "hash-abc", size: 10 },
+		];
+		const cache: Record<string, SHACacheEntry> = {
+			"old-name.md": cacheEntry({ localContentHash: "hash-abc" }),
+		};
+
+		const renames = detectLocalRenames(changes, localFiles, cache);
+
+		expect(renames).toHaveLength(1);
+		expect(renames[0]).toEqual({ oldPath: "old-name.md", newPath: "new-name.md" });
+	});
+
+	it("does not detect rename when content hashes differ", () => {
+		const changes: FileChange[] = [
+			{ path: "old.md", type: "delete" },
+			{ path: "new.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [
+			{ path: "new.md", contentHash: "hash-different", size: 10 },
+		];
+		const cache: Record<string, SHACacheEntry> = {
+			"old.md": cacheEntry({ localContentHash: "hash-original" }),
+		};
+
+		const renames = detectLocalRenames(changes, localFiles, cache);
+
+		expect(renames).toHaveLength(0);
+	});
+
+	it("returns empty when no deletes exist", () => {
+		const changes: FileChange[] = [{ path: "new.md", type: "create" }];
+		const localFiles: LocalFileInfo[] = [{ path: "new.md", contentHash: "h", size: 5 }];
+
+		const renames = detectLocalRenames(changes, localFiles, {});
+
+		expect(renames).toHaveLength(0);
+	});
+
+	it("returns empty when no creates exist", () => {
+		const changes: FileChange[] = [{ path: "old.md", type: "delete" }];
+		const cache: Record<string, SHACacheEntry> = {
+			"old.md": cacheEntry(),
+		};
+
+		const renames = detectLocalRenames(changes, [], cache);
+
+		expect(renames).toHaveLength(0);
+	});
+
+	it("matches first delete to first create with same hash (no duplicates)", () => {
+		const changes: FileChange[] = [
+			{ path: "del-a.md", type: "delete" },
+			{ path: "del-b.md", type: "delete" },
+			{ path: "cre-x.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [{ path: "cre-x.md", contentHash: "same-hash", size: 5 }];
+		const cache: Record<string, SHACacheEntry> = {
+			"del-a.md": cacheEntry({ localContentHash: "same-hash" }),
+			"del-b.md": cacheEntry({ localContentHash: "same-hash" }),
+		};
+
+		const renames = detectLocalRenames(changes, localFiles, cache);
+
+		// Only one rename — first match wins, create consumed
+		expect(renames).toHaveLength(1);
+		expect(renames[0].oldPath).toBe("del-a.md");
+		expect(renames[0].newPath).toBe("cre-x.md");
+	});
+
+	it("ignores modify changes", () => {
+		const changes: FileChange[] = [
+			{ path: "old.md", type: "delete" },
+			{ path: "modified.md", type: "modify" },
+			{ path: "new.md", type: "create" },
+		];
+		const localFiles: LocalFileInfo[] = [
+			{ path: "new.md", contentHash: "h1", size: 5 },
+			{ path: "modified.md", contentHash: "h2", size: 5 },
+		];
+		const cache: Record<string, SHACacheEntry> = {
+			"old.md": cacheEntry({ localContentHash: "h1" }),
+		};
+
+		const renames = detectLocalRenames(changes, localFiles, cache);
+
+		expect(renames).toHaveLength(1);
+		expect(renames[0]).toEqual({ oldPath: "old.md", newPath: "new.md" });
+	});
+});
+
+describe("detectRemoteRenames", () => {
+	it("detects rename when delete + create have same remote SHA", () => {
+		const changes: FileChange[] = [
+			{ path: "old-remote.md", type: "delete" },
+			{ path: "new-remote.md", type: "create" },
+		];
+		const remoteTree: GitHubTreeEntry[] = [treeEntry("new-remote.md", "sha-same")];
+		const cache: Record<string, SHACacheEntry> = {
+			"old-remote.md": cacheEntry({ remoteSha: "sha-same" }),
+		};
+
+		const renames = detectRemoteRenames(changes, remoteTree, cache);
+
+		expect(renames).toHaveLength(1);
+		expect(renames[0]).toEqual({ oldPath: "old-remote.md", newPath: "new-remote.md" });
+	});
+
+	it("does not detect rename when remote SHAs differ", () => {
+		const changes: FileChange[] = [
+			{ path: "old.md", type: "delete" },
+			{ path: "new.md", type: "create" },
+		];
+		const remoteTree: GitHubTreeEntry[] = [treeEntry("new.md", "sha-new")];
+		const cache: Record<string, SHACacheEntry> = {
+			"old.md": cacheEntry({ remoteSha: "sha-old" }),
+		};
+
+		const renames = detectRemoteRenames(changes, remoteTree, cache);
+
+		expect(renames).toHaveLength(0);
+	});
+
+	it("returns empty when no deletes or creates", () => {
+		const changes: FileChange[] = [{ path: "mod.md", type: "modify" }];
+
+		const renames = detectRemoteRenames(changes, [], {});
+
+		expect(renames).toHaveLength(0);
+	});
+
+	it("matches first delete to first create with same SHA", () => {
+		const changes: FileChange[] = [
+			{ path: "del-a.md", type: "delete" },
+			{ path: "del-b.md", type: "delete" },
+			{ path: "cre-x.md", type: "create" },
+		];
+		const remoteTree: GitHubTreeEntry[] = [treeEntry("cre-x.md", "sha-dup")];
+		const cache: Record<string, SHACacheEntry> = {
+			"del-a.md": cacheEntry({ remoteSha: "sha-dup" }),
+			"del-b.md": cacheEntry({ remoteSha: "sha-dup" }),
+		};
+
+		const renames = detectRemoteRenames(changes, remoteTree, cache);
+
+		expect(renames).toHaveLength(1);
+		expect(renames[0].oldPath).toBe("del-a.md");
 	});
 });

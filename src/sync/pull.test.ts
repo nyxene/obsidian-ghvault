@@ -74,6 +74,7 @@ function createMockVault(): VaultAdapter {
 		writeFile: vi.fn().mockResolvedValue(undefined),
 		writeFileBinary: vi.fn().mockResolvedValue(undefined),
 		deleteFile: vi.fn().mockResolvedValue(undefined),
+		renameFile: vi.fn().mockResolvedValue(undefined),
 	};
 }
 

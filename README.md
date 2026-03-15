@@ -30,6 +30,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Mobile-first** — works on iOS, Android, and desktop equally
 - **No git CLI** — uses GitHub REST API for reads and GraphQL `createCommitOnBranch` for writes
 - **Conflict resolution** — configurable strategy for files changed on both sides: skip (default), local-wins, remote-wins, or ask (interactive per-file modal)
+- **Rename detection** — detects file renames (delete + create with same content) in both directions, reports them in sync notices
 - **Automatic GPG signing** — commits made via GraphQL are signed by GitHub automatically
 - **Rate limit aware** — tracks GitHub API rate limits and pauses before hitting them
 - **SHA integrity checks** — verifies downloaded file content matches GitHub's reported SHA

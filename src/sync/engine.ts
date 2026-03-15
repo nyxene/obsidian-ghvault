@@ -1,7 +1,13 @@
-import type { ConflictDecision, ConflictInfo, ConflictStrategy } from "../types";
+import type { ConflictDecision, ConflictInfo, ConflictStrategy, RenameInfo } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
-import { computeLocalChanges, detectConflicts, reconcileFirstSync } from "./comparator";
+import {
+	computeLocalChanges,
+	detectConflicts,
+	detectLocalRenames,
+	detectRemoteRenames,
+	reconcileFirstSync,
+} from "./comparator";
 import type { PullEngine, PullResult } from "./pull";
 import type { PushCommitOptions, PushEngine, PushResult } from "./push";
 import type { SyncStateManager } from "./state";
@@ -12,6 +18,7 @@ export interface SyncVault {
 	writeFile(path: string, content: string): Promise<void>;
 	writeFileBinary(path: string, data: ArrayBuffer): Promise<void>;
 	deleteFile(path: string): Promise<void>;
+	renameFile(oldPath: string, newPath: string): Promise<void>;
 	listFiles(): Promise<LocalFileInfo[]>;
 }
 
@@ -19,6 +26,7 @@ export interface SyncResult {
 	pull: PullResult;
 	push: PushResult | null;
 	conflicts: ConflictInfo[];
+	renames: RenameInfo[];
 	resolvedCount: number;
 	error?: string;
 }
@@ -107,6 +115,18 @@ export class SyncEngine {
 			}
 		}
 
+		// Detect renames: delete + create pairs with matching content hash
+		const localRenames = detectLocalRenames(localChanges, localFiles, cache);
+		const remoteTree = this.pullEngine.getLastMappedTree();
+		const remoteRenames = detectRemoteRenames(remoteChanges, remoteTree, cache);
+		const allRenames = [...localRenames, ...remoteRenames];
+
+		if (allRenames.length > 0) {
+			for (const rename of allRenames) {
+				this.logger.info("Rename detected", { from: rename.oldPath, to: rename.newPath });
+			}
+		}
+
 		// Detect conflicts: files changed both locally and remotely
 		const conflicts = detectConflicts(localChanges, remoteChanges);
 		const conflictPaths = new Set(conflicts.map((c) => c.path));
@@ -133,7 +153,11 @@ export class SyncEngine {
 		// Pull skips: all conflict paths EXCEPT those resolved as remote-wins
 		const pullSkipPaths = new Set([...conflictPaths].filter((p) => !remoteWinPaths.has(p)));
 
-		const pull = await this.pullEngine.pull(this.commitOptions.branch, pullSkipPaths);
+		const pull = await this.pullEngine.pull(
+			this.commitOptions.branch,
+			pullSkipPaths,
+			remoteRenames,
+		);
 
 		// Push includes conflict paths only if resolved as local-wins
 		const safePushChanges = localChanges.filter((c) => {
@@ -166,7 +190,7 @@ export class SyncEngine {
 			conflicts: conflicts.length,
 		});
 
-		return { pull, push, conflicts, resolvedCount: decisions.length };
+		return { pull, push, conflicts, renames: allRenames, resolvedCount: decisions.length };
 	}
 
 	private async resolveConflictDecisions(conflicts: ConflictInfo[]): Promise<ConflictDecision[]> {

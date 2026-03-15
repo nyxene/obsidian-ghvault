@@ -622,6 +622,73 @@ describe("first sync merge", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Group 4c: Rename Detection
+// ---------------------------------------------------------------------------
+describe("rename detection", () => {
+	it("detects local rename (delete + create with same content hash)", async () => {
+		await ensureSyncEngine();
+
+		const content = "file to be renamed";
+		const contentSha = await computeGitBlobSha(content);
+		const contentHash = await computeContentHash(content);
+
+		// First sync: establish file in cache
+		await injectMocks(
+			[{ path: "before-rename.md", sha: contentSha, content, size: content.length }],
+		);
+		await runSync();
+
+		// Now simulate local rename: delete old, create new with same content
+		await obsidianPage.write("after-rename.md", content);
+		await browser.executeObsidian(async ({ app }) => {
+			const file = app.vault.getFileByPath("before-rename.md");
+			if (file) await app.vault.trash(file, false);
+		});
+
+		// Re-inject mocks: remote still has old path
+		await injectMocks(
+			[{ path: "before-rename.md", sha: contentSha, content, size: content.length }],
+			{ headSha: PUSH_OID },
+		);
+
+		const result = await runSync();
+
+		expect(result.renames).toHaveLength(1);
+		expect(result.renames[0].oldPath).toBe("before-rename.md");
+		expect(result.renames[0].newPath).toBe("after-rename.md");
+	});
+
+	it("detects remote rename (delete + create with same SHA)", async () => {
+		await ensureSyncEngine();
+
+		const content = "remote rename test";
+		const contentSha = await computeGitBlobSha(content);
+
+		// First sync: establish file in cache
+		await injectMocks(
+			[{ path: "remote-old.md", sha: contentSha, content, size: content.length }],
+		);
+		await runSync();
+
+		// Now remote renamed: old path gone, new path with same SHA
+		await injectMocks(
+			[{ path: "remote-new.md", sha: contentSha, content, size: content.length }],
+			{ headSha: PUSH_OID },
+		);
+
+		const result = await runSync();
+
+		expect(result.renames).toHaveLength(1);
+		expect(result.renames[0].oldPath).toBe("remote-old.md");
+		expect(result.renames[0].newPath).toBe("remote-new.md");
+
+		// Local file should have been renamed (not delete + create)
+		const newContent = await obsidianPage.read("remote-new.md");
+		expect(newContent).toBe(content);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Group 5: SyncFolder Filtering
 // ---------------------------------------------------------------------------
 describe("syncFolder filtering", () => {

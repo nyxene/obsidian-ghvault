@@ -347,6 +347,33 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Sync
 **Expected:** `shared.md` cached (no conflict). `local-only.md` pushed. `remote-only.md` pulled.
 
+### TC-REN-001: Local rename detected
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** `notes/old-name.md` synced
+**Steps:**
+1. Rename `old-name.md` → `new-name.md` in vault
+2. Sync
+**Expected:** Notice shows "1 renamed". Push contains delete(old) + addition(new).
+
+### TC-REN-002: Remote rename detected
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** `doc.md` synced
+**Steps:**
+1. Rename `doc.md` → `renamed-doc.md` on GitHub
+2. Sync
+**Expected:** Local file renamed (backlinks preserved if Obsidian supports). Notice shows "1 renamed".
+
+### TC-REN-003: Rename + different content is NOT a rename
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** `file.md` synced
+**Steps:**
+1. Delete `file.md`, create `newfile.md` with different content
+2. Sync
+**Expected:** Treated as separate delete + create. Notice shows pushed/pulled counts, no "renamed".
+
 ---
 
 ## Group H: Sync Folder

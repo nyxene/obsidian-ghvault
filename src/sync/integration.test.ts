@@ -57,6 +57,13 @@ function createMockVaultAdapter(initialFiles: MockVaultFile[] = []): SyncVault &
 		deleteFile: vi.fn(async (path: string): Promise<void> => {
 			files.delete(path);
 		}),
+		renameFile: vi.fn(async (oldPath: string, newPath: string): Promise<void> => {
+			const content = files.get(oldPath);
+			if (content !== undefined) {
+				files.delete(oldPath);
+				files.set(newPath, content);
+			}
+		}),
 		listFiles: vi.fn(async (): Promise<LocalFileInfo[]> => {
 			const result: LocalFileInfo[] = [];
 			for (const [path, content] of files) {
