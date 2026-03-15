@@ -579,6 +579,51 @@ describe("GHVaultPlugin", () => {
 
 			expect(lastNotice().message).toBe("GHVault: Synced — 0 pulled, 0 pushed, 1 conflict");
 		});
+
+		it("shows 'resolved (local wins)' for local-wins strategy", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: { pushed: ["conflict.md"], deleted: [] },
+				conflicts: [{ path: "conflict.md", localChange: "modify", remoteChange: "modify" }],
+			});
+
+			const { plugin } = await loadPlugin({
+				settings: {
+					...CONFIGURED_SETTINGS.settings,
+					conflictStrategy: "local-wins",
+				},
+			});
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe(
+				"GHVault: Synced — 0 pulled, 1 pushed, 1 resolved (local wins)",
+			);
+		});
+
+		it("shows 'resolved (remote wins)' for remote-wins strategy", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: ["conflict.md"], deleted: [], errors: [] },
+				push: null,
+				conflicts: [
+					{ path: "a.md", localChange: "modify", remoteChange: "modify" },
+					{ path: "b.md", localChange: "modify", remoteChange: "delete" },
+				],
+			});
+
+			const { plugin } = await loadPlugin({
+				settings: {
+					...CONFIGURED_SETTINGS.settings,
+					conflictStrategy: "remote-wins",
+				},
+			});
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe(
+				"GHVault: Synced — 1 pulled, 0 pushed, 2 resolved (remote wins)",
+			);
+		});
 	});
 
 	describe("runSync guards", () => {
@@ -857,6 +902,27 @@ describe("GHVaultPlugin", () => {
 				settings: { autoSyncPullInterval: "slow" },
 			});
 			expect(plugin.settings.autoSyncPullInterval).toBe(DEFAULT_SETTINGS.autoSyncPullInterval);
+		});
+
+		it("loadSettings parses valid conflictStrategy", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { conflictStrategy: "local-wins" },
+			});
+			expect(plugin.settings.conflictStrategy).toBe("local-wins");
+		});
+
+		it("loadSettings defaults conflictStrategy for invalid value", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { conflictStrategy: "invalid-strategy" },
+			});
+			expect(plugin.settings.conflictStrategy).toBe("skip");
+		});
+
+		it("loadSettings defaults conflictStrategy when missing", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { githubToken: "ghp_token1234567890123456" },
+			});
+			expect(plugin.settings.conflictStrategy).toBe("skip");
 		});
 	});
 

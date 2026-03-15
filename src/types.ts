@@ -12,11 +12,20 @@ export interface GHVaultSettings {
 	autoSync: boolean;
 	autoSyncDebounce: number;
 	autoSyncPullInterval: number;
+	conflictStrategy: ConflictStrategy;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export const VALID_LOG_LEVELS: ReadonlyArray<LogLevel> = ["debug", "info", "warn", "error"];
+
+export type ConflictStrategy = "skip" | "local-wins" | "remote-wins";
+
+export const VALID_CONFLICT_STRATEGIES: ReadonlyArray<ConflictStrategy> = [
+	"skip",
+	"local-wins",
+	"remote-wins",
+];
 
 // ---------------------------------------------------------------------------
 // Sync state
@@ -160,4 +169,5 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	autoSync: false,
 	autoSyncDebounce: 10,
 	autoSyncPullInterval: 300,
+	conflictStrategy: "skip",
 };

@@ -1,6 +1,6 @@
 import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
-import type { GHVaultSettings, LogLevel } from "./types";
-import { VALID_LOG_LEVELS } from "./types";
+import type { ConflictStrategy, GHVaultSettings, LogLevel } from "./types";
+import { VALID_CONFLICT_STRATEGIES, VALID_LOG_LEVELS } from "./types";
 import { normalizePath } from "./utils/path";
 
 export function sanitizeSlug(value: string): string {
@@ -268,6 +268,25 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					pullIntervalSetting.setDesc(pullIntervalDesc(this.settings.autoSyncPullInterval));
 				});
 			});
+
+		new Setting(containerEl)
+			.setName("Conflict strategy")
+			.setDesc("How to handle files changed on both sides")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({
+						skip: "Skip",
+						"local-wins": "Local wins",
+						"remote-wins": "Remote wins",
+					})
+					.setValue(this.settings.conflictStrategy)
+					.onChange(async (value) => {
+						if (VALID_CONFLICT_STRATEGIES.includes(value as ConflictStrategy)) {
+							this.settings.conflictStrategy = value as ConflictStrategy;
+							await this.callbacks.onSave(this.settings);
+						}
+					}),
+			);
 
 		new Setting(containerEl)
 			.setName("Log level")
