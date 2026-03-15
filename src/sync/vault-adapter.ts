@@ -82,6 +82,14 @@ export class ObsidianVaultAdapter implements SyncVault {
 		}
 	}
 
+	async renameFile(oldPath: string, newPath: string): Promise<void> {
+		const file = this.vault.getFileByPath(oldPath);
+		if (file) {
+			await this.ensureParentDir(newPath);
+			await this.vault.rename(file, newPath);
+		}
+	}
+
 	async listFiles(): Promise<LocalFileInfo[]> {
 		const allFiles = this.vault.getFiles();
 		const files = allFiles.filter((f) => !isExcluded(f.path));

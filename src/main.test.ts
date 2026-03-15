@@ -76,6 +76,7 @@ const mockSync = vi.fn().mockResolvedValue({
 	push: null,
 	conflicts: [],
 	resolvedCount: 0,
+	renames: [],
 });
 
 let mockIsSyncing = false;
@@ -340,6 +341,7 @@ describe("GHVaultPlugin", () => {
 			push: null,
 			conflicts: [],
 			resolvedCount: 0,
+			renames: [],
 		});
 		mockIsSyncing = false;
 		mockGetRepoInfo.mockReset();
@@ -575,6 +577,7 @@ describe("GHVaultPlugin", () => {
 				push: { pushed: ["c.md"], deleted: [] },
 				conflicts: [],
 				resolvedCount: 0,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -593,6 +596,7 @@ describe("GHVaultPlugin", () => {
 					{ path: "d.md", localChange: "modify", remoteChange: "delete" },
 				],
 				resolvedCount: 0,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -608,6 +612,7 @@ describe("GHVaultPlugin", () => {
 				push: null,
 				conflicts: [{ path: "x.md", localChange: "modify", remoteChange: "modify" }],
 				resolvedCount: 0,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
@@ -623,6 +628,7 @@ describe("GHVaultPlugin", () => {
 				push: { pushed: ["conflict.md"], deleted: [] },
 				conflicts: [{ path: "conflict.md", localChange: "modify", remoteChange: "modify" }],
 				resolvedCount: 1,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin({
@@ -648,6 +654,7 @@ describe("GHVaultPlugin", () => {
 					{ path: "b.md", localChange: "modify", remoteChange: "delete" },
 				],
 				resolvedCount: 2,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin({
@@ -673,6 +680,7 @@ describe("GHVaultPlugin", () => {
 					{ path: "b.md", localChange: "modify", remoteChange: "modify" },
 				],
 				resolvedCount: 2,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin({
@@ -695,6 +703,7 @@ describe("GHVaultPlugin", () => {
 				push: null,
 				conflicts: [{ path: "x.md", localChange: "modify", remoteChange: "modify" }],
 				resolvedCount: 0,
+				renames: [],
 			});
 
 			const { plugin } = await loadPlugin({
@@ -707,6 +716,22 @@ describe("GHVaultPlugin", () => {
 			await plugin.runSync();
 
 			expect(lastNotice().message).toBe("GHVault: Synced — 0 pulled, 0 pushed, 1 conflict");
+		});
+
+		it("shows rename count in notice", async () => {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: { pushed: ["new.md"], deleted: ["old.md"] },
+				conflicts: [],
+				resolvedCount: 0,
+				renames: [{ oldPath: "old.md", newPath: "new.md" }],
+			});
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			noticeLog.length = 0;
+			await plugin.runSync();
+
+			expect(lastNotice().message).toBe("GHVault: Synced — 0 pulled, 2 pushed, 1 renamed");
 		});
 	});
 
@@ -1363,6 +1388,7 @@ describe("GHVaultPlugin", () => {
 				push: null,
 				conflicts: [],
 				resolvedCount: 0,
+				renames: [],
 			});
 
 			// Wait for runSync to complete — no throw expected

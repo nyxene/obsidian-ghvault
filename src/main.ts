@@ -223,10 +223,15 @@ export default class GHVaultPlugin extends Plugin {
 			const pushCount = (result.push?.pushed.length ?? 0) + (result.push?.deleted.length ?? 0);
 			const conflictCount = result.conflicts.length;
 
-			if (pullCount === 0 && pushCount === 0 && conflictCount === 0) {
+			const renameCount = result.renames?.length ?? 0;
+
+			if (pullCount === 0 && pushCount === 0 && conflictCount === 0 && renameCount === 0) {
 				if (!silent) new Notice("GHVault: Already up to date");
 			} else {
 				const parts = [`${pullCount} pulled`, `${pushCount} pushed`];
+				if (renameCount > 0) {
+					parts.push(`${renameCount} renamed`);
+				}
 				if (conflictCount > 0) {
 					const strategy = this.settings.conflictStrategy;
 					if (strategy === "skip" || result.resolvedCount === 0) {
