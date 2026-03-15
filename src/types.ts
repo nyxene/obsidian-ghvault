@@ -19,13 +19,21 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export const VALID_LOG_LEVELS: ReadonlyArray<LogLevel> = ["debug", "info", "warn", "error"];
 
-export type ConflictStrategy = "skip" | "local-wins" | "remote-wins";
+export type ConflictStrategy = "skip" | "local-wins" | "remote-wins" | "ask";
 
 export const VALID_CONFLICT_STRATEGIES: ReadonlyArray<ConflictStrategy> = [
 	"skip",
 	"local-wins",
 	"remote-wins",
+	"ask",
 ];
+
+export type ConflictResolution = "local" | "remote";
+
+export interface ConflictDecision {
+	path: string;
+	resolution: ConflictResolution;
+}
 
 // ---------------------------------------------------------------------------
 // Sync state

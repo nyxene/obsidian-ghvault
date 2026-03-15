@@ -9,13 +9,21 @@ import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
-import type { ChangeType, ConflictStrategy, GHVaultSettings, LogLevel } from "./types";
+import type {
+	ChangeType,
+	ConflictDecision,
+	ConflictInfo,
+	ConflictStrategy,
+	GHVaultSettings,
+	LogLevel,
+} from "./types";
 import {
 	DEFAULT_SETTINGS,
 	SECRET_PATTERN,
 	VALID_CONFLICT_STRATEGIES,
 	VALID_LOG_LEVELS,
 } from "./types";
+import { ConflictModal } from "./ui/conflict-modal";
 import { Logger } from "./utils/logger";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
@@ -150,11 +158,18 @@ export default class GHVaultPlugin extends Plugin {
 			logger,
 			commitOptions: { branch, owner, repo },
 			conflictStrategy: this.settings.conflictStrategy,
+			onConflict: (conflicts) => this.showConflictModal(conflicts),
 		});
 
 		this.githubClient = client;
 		this.rateLimiter = rateLimiter;
 		this.syncState = state;
+	}
+
+	private async showConflictModal(conflicts: ConflictInfo[]): Promise<ConflictDecision[]> {
+		const modal = new ConflictModal(this.app, conflicts);
+		modal.open();
+		return modal.waitForDecisions();
 	}
 
 	private async testConnection(): Promise<void> {
@@ -214,8 +229,10 @@ export default class GHVaultPlugin extends Plugin {
 				const parts = [`${pullCount} pulled`, `${pushCount} pushed`];
 				if (conflictCount > 0) {
 					const strategy = this.settings.conflictStrategy;
-					if (strategy === "skip") {
+					if (strategy === "skip" || result.resolvedCount === 0) {
 						parts.push(`${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`);
+					} else if (strategy === "ask") {
+						parts.push(`${result.resolvedCount} resolved (per-file)`);
 					} else {
 						const label = strategy === "local-wins" ? "local wins" : "remote wins";
 						parts.push(`${conflictCount} resolved (${label})`);

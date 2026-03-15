@@ -27,7 +27,8 @@ Step-by-step checklist for releasing GHVault. Combines automated gates, manual Q
 - [ ] `npm run type-check` — clean
 - [ ] `npm test` — all unit tests pass
 - [ ] `npm run build` — succeeds, main.js reasonable size
-- [ ] `npm run test:e2e` — all E2E tests pass
+- [ ] `npm run test:e2e` — all E2E tests pass locally
+- [ ] E2E CI workflow green — run via GitHub Actions: Actions → "E2E Tests" → Run workflow (select branch + runner)
 
 ### Obsidian Community Plugin Compliance
 

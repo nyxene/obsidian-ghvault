@@ -1,0 +1,35 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner OS"
+        required: true
+        default: "ubuntu-latest"
+        type: choice
+        options:
+          - ubuntu-latest
+          - macos-latest
+
+jobs:
+  e2e:
+    name: E2E (Obsidian)
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: Run E2E tests (Linux — xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run npm run test:e2e
+
+      - name: Run E2E tests (macOS)
+        if: runner.os == 'macOS'
+        run: npm run test:e2e

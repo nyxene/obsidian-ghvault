@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConflictStrategy, FileChange } from "../types";
+import type { ConflictDecision, ConflictInfo, ConflictStrategy, FileChange } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import type { SyncVault } from "./engine";
@@ -62,6 +62,7 @@ function createEngine(
 		state?: SyncStateManager;
 		vault?: SyncVault;
 		conflictStrategy?: ConflictStrategy;
+		onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
 	} = {},
 ) {
 	const pullEngine = overrides.pullEngine ?? createMockPullEngine();
@@ -76,6 +77,7 @@ function createEngine(
 		logger: createMockLogger(),
 		commitOptions,
 		conflictStrategy: overrides.conflictStrategy,
+		onConflict: overrides.onConflict,
 	});
 	return { engine, pullEngine, pushEngine, state, vault };
 }
@@ -423,6 +425,217 @@ describe("SyncEngine", () => {
 			const result = await engine.sync();
 
 			expect(result.conflicts).toEqual([]);
+		});
+
+		it("ask: calls onConflict callback and applies per-file decisions", async () => {
+			const remoteChanges: FileChange[] = [
+				{ path: "a.md", type: "modify" },
+				{ path: "b.md", type: "modify" },
+			];
+			const pullResult: PullResult = {
+				created: [],
+				modified: ["b.md"],
+				deleted: [],
+				errors: [],
+			};
+			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
+
+			const vault = createMockVault([
+				{ path: "a.md", contentHash: "new-a", size: 10 },
+				{ path: "b.md", contentHash: "new-b", size: 10 },
+			]);
+			const state = createMockState({
+				"a.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-a",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+				"b.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-b",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const onConflict = vi.fn().mockResolvedValue([
+				{ path: "a.md", resolution: "local" },
+				{ path: "b.md", resolution: "remote" },
+			]);
+
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "ask",
+				onConflict,
+			});
+
+			const result = await engine.sync();
+
+			expect(onConflict).toHaveBeenCalledWith(
+				expect.arrayContaining([
+					expect.objectContaining({ path: "a.md" }),
+					expect.objectContaining({ path: "b.md" }),
+				]),
+			);
+			expect(result.conflicts).toHaveLength(2);
+			expect(result.resolvedCount).toBe(2);
+
+			// a.md = local wins → skip in pull, include in push
+			// b.md = remote wins → include in pull, skip in push
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["a.md"]));
+			expect(pushEngine.push).toHaveBeenCalledWith(
+				[expect.objectContaining({ path: "a.md", type: "modify" })],
+				expect.any(Object),
+			);
+		});
+
+		it("ask: falls back to skip when onConflict is not provided", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+
+			const vault = createMockVault([{ path: "conflict.md", contentHash: "new-hash", size: 10 }]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "ask",
+			});
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.resolvedCount).toBe(0);
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pushEngine.push).not.toHaveBeenCalled();
+		});
+
+		it("ask: falls back to skip when onConflict callback throws", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+
+			const vault = createMockVault([{ path: "conflict.md", contentHash: "new-hash", size: 10 }]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const onConflict = vi.fn().mockRejectedValue(new Error("modal closed"));
+
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "ask",
+				onConflict,
+			});
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.resolvedCount).toBe(0);
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pushEngine.push).not.toHaveBeenCalled();
+		});
+
+		it("ask: skip all returns empty decisions (same as skip behavior)", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+
+			const vault = createMockVault([{ path: "conflict.md", contentHash: "new-hash", size: 10 }]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const onConflict = vi.fn().mockResolvedValue([]);
+
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "ask",
+				onConflict,
+			});
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.resolvedCount).toBe(0);
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pushEngine.push).not.toHaveBeenCalled();
+		});
+
+		it("resolvedCount is set for non-ask strategies", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+
+			const vault = createMockVault([{ path: "conflict.md", contentHash: "new-hash", size: 10 }]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+
+			const { engine: skipEngine } = createEngine({
+				pullEngine: createMockPullEngine(emptyPull, remoteChanges),
+				pushEngine,
+				vault,
+				state: createMockState({
+					"conflict.md": {
+						remoteSha: "old-sha",
+						localContentHash: "old-hash",
+						lastSyncedAt: 1000,
+						size: 10,
+						isBinary: false,
+					},
+				}),
+			});
+			const skipResult = await skipEngine.sync();
+			expect(skipResult.resolvedCount).toBe(0);
+
+			const { engine: localEngine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "local-wins",
+			});
+			const localResult = await localEngine.sync();
+			expect(localResult.resolvedCount).toBe(1);
 		});
 	});
 });

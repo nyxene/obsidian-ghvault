@@ -316,6 +316,17 @@ All four gates must pass. A single failure blocks the merge.
 | test | vitest | Unit tests pass |
 | build | esbuild | Plugin compiles to main.js |
 
+### E2E Pipeline (manual via GitHub Actions)
+
+```
+logbook: build → e2e (wdio-obsidian-service)
+```
+
+E2E tests run against a real Obsidian instance. Triggered manually before releases:
+GitHub → Actions → "E2E Tests" → Run workflow (select branch + runner).
+
+Linux uses `xvfb-run` for virtual display. macOS runs directly.
+
 ### Pull Request
 
 PRs to `main` require:

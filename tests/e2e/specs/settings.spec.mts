@@ -308,11 +308,21 @@ describe("settings UI", () => {
 	});
 
 	it("log level dropdown has 4 options with correct default", async () => {
-		const dropdown = await browser.$(".ghvault-settings select");
-		const value = await dropdown.getValue();
+		// Find the log level dropdown (has "debug" option, not "skip")
+		const dropdowns = await browser.$$(".ghvault-settings select");
+		let logDropdown: WebdriverIO.Element | null = null;
+		for (const dd of dropdowns) {
+			const val = await dd.getValue();
+			if (val === "info" || val === "debug" || val === "warn" || val === "error") {
+				logDropdown = dd;
+				break;
+			}
+		}
+		expect(logDropdown).not.toBeNull();
+		const value = await logDropdown!.getValue();
 		expect(value).toBe("info");
 
-		const options = await browser.$$(".ghvault-settings select option");
+		const options = await logDropdown!.$$("option");
 		const values: string[] = [];
 		for (const opt of options) {
 			values.push(await opt.getAttribute("value"));

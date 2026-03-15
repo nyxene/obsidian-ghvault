@@ -1,4 +1,4 @@
-import type { ConflictInfo, ConflictStrategy } from "../types";
+import type { ConflictDecision, ConflictInfo, ConflictStrategy } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import { computeLocalChanges, detectConflicts } from "./comparator";
@@ -19,6 +19,7 @@ export interface SyncResult {
 	pull: PullResult;
 	push: PushResult | null;
 	conflicts: ConflictInfo[];
+	resolvedCount: number;
 	error?: string;
 }
 
@@ -30,6 +31,7 @@ export interface SyncEngineOptions {
 	logger: Logger;
 	commitOptions: Omit<PushCommitOptions, "message">;
 	conflictStrategy?: ConflictStrategy;
+	onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
 }
 
 export class SyncEngine {
@@ -40,6 +42,7 @@ export class SyncEngine {
 	private readonly logger: Logger;
 	private readonly commitOptions: Omit<PushCommitOptions, "message">;
 	private readonly conflictStrategy: ConflictStrategy;
+	private readonly onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
 	private syncPromise: Promise<SyncResult> | null = null;
 
 	constructor(options: SyncEngineOptions) {
@@ -50,6 +53,7 @@ export class SyncEngine {
 		this.logger = options.logger;
 		this.commitOptions = options.commitOptions;
 		this.conflictStrategy = options.conflictStrategy ?? "skip";
+		this.onConflict = options.onConflict;
 	}
 
 	get isSyncing(): boolean {
@@ -96,16 +100,24 @@ export class SyncEngine {
 			}
 		}
 
-		// Determine which sides get the conflicted files based on strategy
-		const pullSkipPaths =
-			this.conflictStrategy === "remote-wins" ? new Set<string>() : conflictPaths;
+		// Resolve conflict decisions based on strategy
+		const decisions = await this.resolveConflictDecisions(conflicts);
+		const localWinPaths = new Set(
+			decisions.filter((d) => d.resolution === "local").map((d) => d.path),
+		);
+		const remoteWinPaths = new Set(
+			decisions.filter((d) => d.resolution === "remote").map((d) => d.path),
+		);
+
+		// Pull skips: all conflict paths EXCEPT those resolved as remote-wins
+		const pullSkipPaths = new Set([...conflictPaths].filter((p) => !remoteWinPaths.has(p)));
 
 		const pull = await this.pullEngine.pull(this.commitOptions.branch, pullSkipPaths);
 
-		// Filter local changes: include conflicts only for local-wins
+		// Push includes conflict paths only if resolved as local-wins
 		const safePushChanges = localChanges.filter((c) => {
 			if (!conflictPaths.has(c.path)) return true;
-			return this.conflictStrategy === "local-wins";
+			return localWinPaths.has(c.path);
 		});
 
 		let push: PushResult | null = null;
@@ -133,6 +145,33 @@ export class SyncEngine {
 			conflicts: conflicts.length,
 		});
 
-		return { pull, push, conflicts };
+		return { pull, push, conflicts, resolvedCount: decisions.length };
+	}
+
+	private async resolveConflictDecisions(conflicts: ConflictInfo[]): Promise<ConflictDecision[]> {
+		if (conflicts.length === 0) return [];
+
+		switch (this.conflictStrategy) {
+			case "local-wins":
+				return conflicts.map((c) => ({ path: c.path, resolution: "local" }));
+			case "remote-wins":
+				return conflicts.map((c) => ({ path: c.path, resolution: "remote" }));
+			case "ask":
+				if (this.onConflict) {
+					try {
+						return await this.onConflict(conflicts);
+					} catch (error: unknown) {
+						const message = error instanceof Error ? error.message : String(error);
+						this.logger.warn("Conflict callback failed, falling back to skip", {
+							error: message,
+						});
+						return [];
+					}
+				}
+				this.logger.warn("Ask strategy with no onConflict callback, falling back to skip");
+				return [];
+			default:
+				return [];
+		}
 	}
 }

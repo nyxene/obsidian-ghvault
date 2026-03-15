@@ -72,6 +72,7 @@ docs/
 - **PR footer:** `*Mobilis in Mobili*` — NEVER use `🤖 Generated with Claude Code` or any other AI-generated corporate stamps
 - **GitHub operations:** ALL interactions with GitHub (push, PR create/edit/list, status) MUST go through `scripts/github.sh`. NEVER parse `.env` or use `GH_TOKEN=...` inline. Examples: `scripts/github.sh push`, `scripts/github.sh pr-create "title"`, `scripts/github.sh status`
 - **CI:** lint → type-check → test → build (all four gates must pass)
+- **E2E:** `e2e.yml` workflow — manual trigger (`workflow_dispatch`) before releases. Runs wdio-obsidian-service tests against real Obsidian. Linux uses `xvfb-run`, macOS runs directly.
 - **Release:** release-please auto-generates CHANGELOG and GitHub Releases
 - Branch naming: `feat/N-slug`, `fix/N-slug` (N = issue number)
 - Never force push to main
