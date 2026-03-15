@@ -1,0 +1,229 @@
+import { describe, expect, it, vi } from "vitest";
+import type { FileCommitInfo } from "../types";
+
+// ---------------------------------------------------------------------------
+// Minimal DOM mock for Modal contentEl
+// ---------------------------------------------------------------------------
+
+interface MockEl {
+	tag: string;
+	text?: string;
+	cls?: string;
+	children: MockEl[];
+	style: Record<string, string>;
+	disabled: boolean;
+	listeners: Record<string, (() => void)[]>;
+	createEl(tag: string, opts?: { text?: string; cls?: string }): MockEl;
+	querySelector(sel: string): MockEl | null;
+	querySelectorAll(sel: string): MockEl[];
+	addEventListener(event: string, handler: () => void): void;
+	setText(text: string): void;
+	empty(): void;
+	addClass(cls: string): void;
+}
+
+function createMockEl(tag = "div", opts?: { text?: string; cls?: string }): MockEl {
+	const el: MockEl = {
+		tag,
+		text: opts?.text,
+		cls: opts?.cls,
+		children: [],
+		style: {},
+		disabled: false,
+		listeners: {},
+		createEl(childTag: string, childOpts?: { text?: string; cls?: string }): MockEl {
+			const child = createMockEl(childTag, childOpts);
+			this.children.push(child);
+			return child;
+		},
+		querySelector(sel: string): MockEl | null {
+			return findByCls(this, sel.replace(".", ""));
+		},
+		querySelectorAll(sel: string): MockEl[] {
+			return findAllByCls(this, sel.replace(".", ""));
+		},
+		addEventListener(event: string, handler: () => void): void {
+			if (!this.listeners[event]) this.listeners[event] = [];
+			this.listeners[event].push(handler);
+		},
+		setText(text: string): void {
+			this.text = text;
+		},
+		empty(): void {
+			this.children = [];
+		},
+		addClass(): void {},
+	};
+	return el;
+}
+
+function findByCls(root: MockEl, cls: string): MockEl | null {
+	if (root.cls === cls) return root;
+	for (const child of root.children) {
+		const found = findByCls(child, cls);
+		if (found) return found;
+	}
+	return null;
+}
+
+function findAllByCls(root: MockEl, cls: string): MockEl[] {
+	const results: MockEl[] = [];
+	if (root.cls === cls) results.push(root);
+	for (const child of root.children) {
+		results.push(...findAllByCls(child, cls));
+	}
+	return results;
+}
+
+function findByText(root: MockEl, text: string): MockEl | null {
+	if (root.text?.includes(text)) return root;
+	for (const child of root.children) {
+		const found = findByText(child, text);
+		if (found) return found;
+	}
+	return null;
+}
+
+vi.mock("obsidian", () => ({
+	Modal: class MockModal {
+		app: unknown;
+		contentEl: MockEl;
+		constructor(app: unknown) {
+			this.app = app;
+			this.contentEl = createMockEl();
+		}
+		open(): void {}
+		close(): void {}
+	},
+}));
+
+import type { FileHistoryProvider } from "./file-history-modal";
+import { FileHistoryModal } from "./file-history-modal";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const twoCommits: FileCommitInfo[] = [
+	{
+		sha: "abc123",
+		message: "vault sync: 1 file(s)",
+		authorName: "John",
+		date: new Date(Date.now() - 3600000).toISOString(),
+		htmlUrl: "https://github.com/test/repo/commit/abc123",
+	},
+	{
+		sha: "def456",
+		message:
+			"initial commit with a very long message that should be truncated at eighty characters limit boundary here",
+		authorName: "Jane",
+		date: new Date(Date.now() - 86400000 * 3).toISOString(),
+		htmlUrl: "https://github.com/test/repo/commit/def456",
+	},
+];
+
+function createMockProvider(commits: FileCommitInfo[] = twoCommits): FileHistoryProvider {
+	return { listFileCommits: vi.fn().mockResolvedValue(commits) };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("FileHistoryModal", () => {
+	it("renders heading with filename", async () => {
+		const modal = new FileHistoryModal({} as never, "docs/note.md", "main", createMockProvider());
+		await modal.onOpen();
+
+		const heading = findByText(modal.contentEl as unknown as MockEl, "note.md");
+		expect(heading).not.toBeNull();
+	});
+
+	it("renders commit rows", async () => {
+		const modal = new FileHistoryModal({} as never, "file.md", "main", createMockProvider());
+		await modal.onOpen();
+
+		const rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+		expect(rows).toHaveLength(2);
+	});
+
+	it("truncates long commit messages", async () => {
+		const modal = new FileHistoryModal({} as never, "file.md", "main", createMockProvider());
+		await modal.onOpen();
+
+		const rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+		const secondRow = rows[1];
+		const msgDiv = secondRow.children[0];
+		expect(msgDiv.text?.length).toBeLessThanOrEqual(80);
+		expect(msgDiv.text).toContain("...");
+	});
+
+	it("shows author and relative date", async () => {
+		const modal = new FileHistoryModal({} as never, "file.md", "main", createMockProvider());
+		await modal.onOpen();
+
+		const rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+		const meta = rows[0].children[1];
+		expect(meta.text).toContain("John");
+		expect(meta.text).toContain("ago");
+	});
+
+	it("shows empty message when no commits", async () => {
+		const modal = new FileHistoryModal({} as never, "file.md", "main", createMockProvider([]));
+		await modal.onOpen();
+
+		const empty = findByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-empty");
+		expect(empty).not.toBeNull();
+		expect(empty?.text).toContain("No commits found");
+	});
+
+	it("hides Load more when fewer than page size results", async () => {
+		const modal = new FileHistoryModal({} as never, "file.md", "main", createMockProvider());
+		await modal.onOpen();
+
+		const footer = findByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-footer");
+		const btn = footer?.children[0];
+		expect(btn?.style.display).toBe("none");
+	});
+
+	it("shows Load more when page is full", async () => {
+		const fullPage = Array.from({ length: 20 }, (_, i) => ({
+			sha: `sha-${i}`,
+			message: `commit ${i}`,
+			authorName: "User",
+			date: new Date().toISOString(),
+			htmlUrl: `https://github.com/test/repo/commit/sha-${i}`,
+		}));
+		const modal = new FileHistoryModal(
+			{} as never,
+			"file.md",
+			"main",
+			createMockProvider(fullPage),
+		);
+		await modal.onOpen();
+
+		const footer = findByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-footer");
+		const btn = footer?.children[0];
+		expect(btn?.style.display).not.toBe("none");
+	});
+
+	it("calls provider with correct path and branch", async () => {
+		const provider = createMockProvider();
+		const modal = new FileHistoryModal({} as never, "docs/note.md", "develop", provider);
+		await modal.onOpen();
+
+		expect(provider.listFileCommits).toHaveBeenCalledWith("docs/note.md", "develop", 20, 1);
+	});
+
+	it("shows error message when provider throws", async () => {
+		const provider: FileHistoryProvider = {
+			listFileCommits: vi.fn().mockRejectedValue(new Error("Network error")),
+		};
+		const modal = new FileHistoryModal({} as never, "file.md", "main", provider);
+		await modal.onOpen();
+
+		const error = findByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-error");
+		expect(error).not.toBeNull();
+		expect(error?.text).toContain("Network error");
+	});
+});

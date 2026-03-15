@@ -609,3 +609,180 @@ describe("load test: 50+ files", () => {
 		expect(pushPaths).toContain("push/file-050.md");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Group 6: File History Modal
+// ---------------------------------------------------------------------------
+describe("file history modal", () => {
+	before(async () => {
+		await ensureSyncEngine();
+	});
+
+	afterEach(async () => {
+		// Dismiss any leftover modal
+		await browser.execute(() => {
+			const container = document.querySelector(".modal-container");
+			if (container) {
+				const close = container.querySelector(".modal-close-button") as HTMLElement;
+				if (close) close.click();
+			}
+		});
+		await browser.pause(200);
+	});
+
+	after(async () => {
+		await resetPluginSettings();
+	});
+
+	it("file history command is registered", async () => {
+		const commands = await browser.executeObsidian(({ app }) => {
+			const cmds = (app as any).commands.commands;
+			return Object.keys(cmds).filter((id: string) => id.includes("ghvault"));
+		});
+		expect(commands).toContain("ghvault:ghvault-file-history");
+	});
+
+	it("shows file history modal with mock commits", async () => {
+		// Write a file and open it
+		await browser.executeObsidian(async ({ app }) => {
+			const existing = app.vault.getFileByPath("history-test.md");
+			if (!existing) {
+				await app.vault.create("history-test.md", "test content");
+			}
+			const file = app.vault.getFileByPath("history-test.md");
+			if (file) {
+				await app.workspace.openLinkText("history-test.md", "", false);
+			}
+		});
+		await browser.pause(500);
+
+		// Mock listFileCommits on the githubClient
+		await browser.executeObsidian(({ plugins }) => {
+			const plugin = plugins.ghvault as any;
+			if (!plugin.githubClient) throw new Error("githubClient is null");
+			plugin.githubClient.listFileCommits = async () => [
+				{
+					sha: "abc123def456",
+					message: "vault sync: 1 file(s)",
+					authorName: "TestUser",
+					date: "2026-03-15T10:00:00Z",
+					htmlUrl: "https://github.com/test/repo/commit/abc123",
+				},
+				{
+					sha: "def456abc789",
+					message: "initial commit",
+					authorName: "AnotherUser",
+					date: "2026-03-14T09:00:00Z",
+					htmlUrl: "https://github.com/test/repo/commit/def456",
+				},
+			];
+		});
+
+		// Trigger file history command
+		await browser.executeObsidianCommand("ghvault:ghvault-file-history");
+		await browser.pause(1000);
+
+		// Modal should appear
+		const modal = await browser.$(".ghvault-file-history-modal");
+		expect(await modal.isDisplayed()).toBe(true);
+
+		// Check heading contains filename
+		const heading = await browser.$(".ghvault-file-history-modal h2");
+		const headingText = await heading.getText();
+		expect(headingText).toContain("history-test.md");
+
+		// Check commit rows
+		const rows = await browser.$$(".ghvault-file-history-row");
+		expect(rows.length).toBe(2);
+
+		// Check first commit content
+		const firstRow = await rows[0].getText();
+		expect(firstRow).toContain("vault sync");
+		expect(firstRow).toContain("TestUser");
+	});
+
+	it("shows empty state when no commits", async () => {
+		await browser.executeObsidian(async ({ app }) => {
+			const existing = app.vault.getFileByPath("no-history.md");
+			if (!existing) {
+				await app.vault.create("no-history.md", "new file");
+			}
+			await app.workspace.openLinkText("no-history.md", "", false);
+		});
+		await browser.pause(500);
+
+		// Mock empty response
+		await browser.executeObsidian(({ plugins }) => {
+			const plugin = plugins.ghvault as any;
+			if (!plugin.githubClient) throw new Error("githubClient is null");
+			plugin.githubClient.listFileCommits = async () => [];
+		});
+
+		await browser.executeObsidianCommand("ghvault:ghvault-file-history");
+		await browser.pause(1000);
+
+		const emptyMsg = await browser.$(".ghvault-file-history-empty");
+		expect(await emptyMsg.isDisplayed()).toBe(true);
+		const text = await emptyMsg.getText();
+		expect(text).toContain("No commits found");
+	});
+
+	it("shows Load more button when page is full", async () => {
+		await browser.executeObsidian(async ({ app }) => {
+			await app.workspace.openLinkText("history-test.md", "", false);
+		});
+		await browser.pause(500);
+
+		// Mock 20 commits (full page)
+		await browser.executeObsidian(({ plugins }) => {
+			const plugin = plugins.ghvault as any;
+			if (!plugin.githubClient) throw new Error("githubClient is null");
+			let callCount = 0;
+			plugin.githubClient.listFileCommits = async () => {
+				callCount++;
+				if (callCount === 1) {
+					return Array.from({ length: 20 }, (_, i) => ({
+						sha: `sha-${i}`,
+						message: `commit ${i}`,
+						authorName: "User",
+						date: "2026-03-15T10:00:00Z",
+						htmlUrl: `https://github.com/test/repo/commit/sha-${i}`,
+					}));
+				}
+				// Second page: fewer than 20
+				return [
+					{
+						sha: "sha-last",
+						message: "last commit",
+						authorName: "User",
+						date: "2026-03-14T10:00:00Z",
+						htmlUrl: "https://github.com/test/repo/commit/sha-last",
+					},
+				];
+			};
+		});
+
+		await browser.executeObsidianCommand("ghvault:ghvault-file-history");
+		await browser.pause(1000);
+
+		// Should have 20 rows
+		let rows = await browser.$$(".ghvault-file-history-row");
+		expect(rows.length).toBe(20);
+
+		// Load more button should be visible
+		const loadMoreBtn = await browser.$(".ghvault-file-history-footer button");
+		expect(await loadMoreBtn.isDisplayed()).toBe(true);
+		expect(await loadMoreBtn.getText()).toBe("Load more");
+
+		// Click Load more
+		await loadMoreBtn.click();
+		await browser.pause(1000);
+
+		// Should now have 21 rows
+		rows = await browser.$$(".ghvault-file-history-row");
+		expect(rows.length).toBe(21);
+
+		// Load more should be hidden (last page had < 20)
+		expect(await loadMoreBtn.isDisplayed()).toBe(false);
+	});
+});

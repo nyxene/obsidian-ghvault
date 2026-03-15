@@ -240,8 +240,10 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 			return createMockElement();
 		});
 
-	plugin.addCommand = vi.fn().mockImplementation((cmd: { callback: () => void }) => {
-		commandCallback = cmd.callback;
+	plugin.addCommand = vi.fn().mockImplementation((cmd: { callback?: () => void }) => {
+		if (cmd.callback) {
+			commandCallback = cmd.callback;
+		}
 		return cmd;
 	});
 
@@ -453,6 +455,18 @@ describe("GHVaultPlugin", () => {
 			const addCommandCall = vi.mocked(plugin.addCommand).mock.calls[0][0];
 			expect(addCommandCall.id).toBe("ghvault-sync");
 			expect(addCommandCall.name).toBe("Sync now");
+		});
+
+		it("file history command is registered", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const historyCmd = calls.find(
+				(c: [{ id: string; name: string; checkCallback?: unknown }]) =>
+					c[0].id === "ghvault-file-history",
+			);
+			expect(historyCmd).toBeDefined();
+			expect(historyCmd?.[0].name).toBe("Show file history");
+			expect(historyCmd?.[0].checkCallback).toBeDefined();
 		});
 	});
 
