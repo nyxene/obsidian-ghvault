@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import type { GitHubGraphQL } from "../github/graphql";
-import type { SHACacheEntry } from "../types";
+import type { ConflictStrategy, SHACacheEntry } from "../types";
 import { computeGitBlobSha, computeHash, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { ChangeQueue } from "./change-queue";
@@ -179,6 +179,7 @@ function createIntegrationSetup(options: {
 	headSha?: string;
 	pushOid?: string;
 	syncFolder?: string;
+	conflictStrategy?: ConflictStrategy;
 }): IntegrationSetup {
 	const vault = createMockVaultAdapter(options.localFiles ?? []);
 	const client = createMockGitHubClient(options.remoteFiles ?? [], options.headSha);
@@ -198,6 +199,7 @@ function createIntegrationSetup(options: {
 		vault,
 		logger,
 		commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+		conflictStrategy: options.conflictStrategy,
 	});
 
 	return { engine, vault, client, graphql, state, storage };
@@ -483,6 +485,66 @@ describe("Sync integration", () => {
 
 			// Conflicted file should be untouched
 			expect(vault.files.get("conflict.md")).toBe("local version");
+		});
+	});
+
+	describe("conflict resolution strategies", () => {
+		const conflictCache = {
+			syncState: {
+				lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
+				lastSyncedAt: 1000,
+				cache: {
+					"conflict.md": {
+						remoteSha: "sha-remote-v1",
+						localContentHash: "old-local-hash",
+						lastSyncedAt: 1000,
+						size: 10,
+						isBinary: false,
+					},
+				},
+			},
+		};
+
+		it("local-wins pushes local version of conflicted file", async () => {
+			const { engine, vault, graphql, storage } = createIntegrationSetup({
+				localFiles: [{ path: "conflict.md", content: "local version" }],
+				remoteFiles: [
+					{ path: "conflict.md", sha: "sha-remote-v2", content: "remote version", size: 14 },
+				],
+				conflictStrategy: "local-wins",
+			});
+
+			storage.data = JSON.parse(JSON.stringify(conflictCache));
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			// Local file should NOT be overwritten by remote
+			expect(vault.files.get("conflict.md")).toBe("local version");
+			// Local version should be pushed
+			expect(result.push).not.toBeNull();
+			expect(graphql.createCommit).toHaveBeenCalled();
+		});
+
+		it("remote-wins pulls remote version of conflicted file", async () => {
+			const { engine, vault, storage } = createIntegrationSetup({
+				localFiles: [{ path: "conflict.md", content: "local version" }],
+				remoteFiles: [
+					{ path: "conflict.md", sha: "sha-remote-v2", content: "remote version", size: 14 },
+				],
+				conflictStrategy: "remote-wins",
+			});
+
+			storage.data = JSON.parse(JSON.stringify(conflictCache));
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			// Remote version should overwrite local
+			expect(vault.files.get("conflict.md")).toBe("remote version");
+			expect(result.pull.modified).toContain("conflict.md");
+			// Local version should NOT be pushed
+			expect(result.push).toBeNull();
 		});
 	});
 

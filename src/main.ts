@@ -9,8 +9,13 @@ import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
-import type { ChangeType, GHVaultSettings, LogLevel } from "./types";
-import { DEFAULT_SETTINGS, SECRET_PATTERN, VALID_LOG_LEVELS } from "./types";
+import type { ChangeType, ConflictStrategy, GHVaultSettings, LogLevel } from "./types";
+import {
+	DEFAULT_SETTINGS,
+	SECRET_PATTERN,
+	VALID_CONFLICT_STRATEGIES,
+	VALID_LOG_LEVELS,
+} from "./types";
 import { Logger } from "./utils/logger";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
@@ -144,6 +149,7 @@ export default class GHVaultPlugin extends Plugin {
 			vault: vaultAdapter,
 			logger,
 			commitOptions: { branch, owner, repo },
+			conflictStrategy: this.settings.conflictStrategy,
 		});
 
 		this.githubClient = client;
@@ -207,7 +213,13 @@ export default class GHVaultPlugin extends Plugin {
 			} else {
 				const parts = [`${pullCount} pulled`, `${pushCount} pushed`];
 				if (conflictCount > 0) {
-					parts.push(`${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`);
+					const strategy = this.settings.conflictStrategy;
+					if (strategy === "skip") {
+						parts.push(`${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`);
+					} else {
+						const label = strategy === "local-wins" ? "local wins" : "remote wins";
+						parts.push(`${conflictCount} resolved (${label})`);
+					}
 				}
 				new Notice(`GHVault: Synced — ${parts.join(", ")}`);
 			}
@@ -422,6 +434,11 @@ export default class GHVaultPlugin extends Plugin {
 				autoSync,
 				autoSyncDebounce,
 				autoSyncPullInterval,
+				conflictStrategy: VALID_CONFLICT_STRATEGIES.includes(
+					raw.conflictStrategy as ConflictStrategy,
+				)
+					? (raw.conflictStrategy as ConflictStrategy)
+					: DEFAULT_SETTINGS.conflictStrategy,
 			};
 		}
 	}

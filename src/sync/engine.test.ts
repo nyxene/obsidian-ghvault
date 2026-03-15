@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FileChange } from "../types";
+import type { ConflictStrategy, FileChange } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import type { SyncVault } from "./engine";
@@ -61,6 +61,7 @@ function createEngine(
 		pushEngine?: PushEngine;
 		state?: SyncStateManager;
 		vault?: SyncVault;
+		conflictStrategy?: ConflictStrategy;
 	} = {},
 ) {
 	const pullEngine = overrides.pullEngine ?? createMockPullEngine();
@@ -74,6 +75,7 @@ function createEngine(
 		vault,
 		logger: createMockLogger(),
 		commitOptions,
+		conflictStrategy: overrides.conflictStrategy,
 	});
 	return { engine, pullEngine, pushEngine, state, vault };
 }
@@ -302,6 +304,111 @@ describe("SyncEngine", () => {
 				[expect.objectContaining({ path: "local-only.md", type: "create" })],
 				expect.any(Object),
 			);
+		});
+
+		it("local-wins: includes conflicted files in push, excludes from pull", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullResult: PullResult = { created: [], modified: [], deleted: [], errors: [] };
+			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
+
+			const vault = createMockVault([
+				{ path: "conflict.md", contentHash: "new-local-hash", size: 10 },
+			]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-local-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "local-wins",
+			});
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			// Pull should skip conflicted file
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			// Push should include conflicted file
+			expect(pushEngine.push).toHaveBeenCalledWith(
+				[expect.objectContaining({ path: "conflict.md", type: "modify" })],
+				expect.any(Object),
+			);
+		});
+
+		it("remote-wins: includes conflicted files in pull, excludes from push", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullResult: PullResult = {
+				created: [],
+				modified: ["conflict.md"],
+				deleted: [],
+				errors: [],
+			};
+			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
+
+			const vault = createMockVault([
+				{ path: "conflict.md", contentHash: "new-local-hash", size: 10 },
+			]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-local-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "remote-wins",
+			});
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			// Pull should NOT skip conflicted file (empty skip set)
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set());
+			// Push should NOT include conflicted file
+			expect(pushEngine.push).not.toHaveBeenCalled();
+		});
+
+		it("default strategy (undefined) behaves as skip", async () => {
+			const remoteChanges: FileChange[] = [{ path: "conflict.md", type: "modify" }];
+			const pullEngine = createMockPullEngine(emptyPull, remoteChanges);
+
+			const vault = createMockVault([
+				{ path: "conflict.md", contentHash: "new-local-hash", size: 10 },
+			]);
+			const state = createMockState({
+				"conflict.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-local-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushEngine = createMockPushEngine();
+			// No conflictStrategy passed — should default to "skip"
+			const { engine } = createEngine({ pullEngine, pushEngine, vault, state });
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(pullEngine.pull).toHaveBeenCalledWith("main", new Set(["conflict.md"]));
+			expect(pushEngine.push).not.toHaveBeenCalled();
 		});
 
 		it("reports no conflicts when changes are on different files", async () => {

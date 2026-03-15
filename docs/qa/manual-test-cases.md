@@ -223,6 +223,66 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 4. Sync
 **Expected:** `conflict.md` skipped, `safe.md` pushed, `remote-new.md` pulled
 
+### TC-CONF-003: Local-wins resolves by pushing local version
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Local wins", `shared.md` synced
+**Steps:**
+1. Edit `shared.md` in vault
+2. Edit `shared.md` via GitHub web UI
+3. Sync
+**Expected:** Local version pushed to GitHub, remote overwritten. Notice shows "1 resolved (local wins)"
+
+### TC-CONF-004: Remote-wins resolves by pulling remote version
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Remote wins", `shared.md` synced
+**Steps:**
+1. Edit `shared.md` in vault
+2. Edit `shared.md` via GitHub web UI
+3. Sync
+**Expected:** Remote version pulled to vault, local overwritten. Notice shows "1 resolved (remote wins)"
+
+### TC-CONF-005: Skip strategy preserves current behavior
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Skip" (default), `shared.md` synced
+**Steps:**
+1. Edit `shared.md` in both vault and GitHub
+2. Sync
+**Expected:** File skipped on both sides, Notice shows "1 conflict"
+
+### TC-CONF-006: Strategy change takes effect on next sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Skip"
+**Steps:**
+1. Create a conflict (edit file in both vault and GitHub)
+2. Sync — file should be skipped
+3. Change strategy to "Local wins" in settings
+4. Sync again
+**Expected:** Second sync resolves conflict with local-wins strategy
+
+### TC-CONF-007: Local-wins with delete conflict
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Local wins", `shared.md` synced
+**Steps:**
+1. Delete `shared.md` on GitHub
+2. Edit `shared.md` in vault
+3. Sync
+**Expected:** Local version pushed (re-created on GitHub)
+
+### TC-CONF-008: Remote-wins with delete conflict
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Conflict strategy = "Remote wins", `shared.md` synced
+**Steps:**
+1. Delete `shared.md` on GitHub
+2. Edit `shared.md` in vault
+3. Sync
+**Expected:** Local file deleted (matches remote state)
+
 ---
 
 ## Group H: Sync Folder

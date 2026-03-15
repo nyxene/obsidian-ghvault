@@ -1,4 +1,4 @@
-import type { ConflictInfo } from "../types";
+import type { ConflictInfo, ConflictStrategy } from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import { computeLocalChanges, detectConflicts } from "./comparator";
@@ -29,6 +29,7 @@ export interface SyncEngineOptions {
 	vault: SyncVault;
 	logger: Logger;
 	commitOptions: Omit<PushCommitOptions, "message">;
+	conflictStrategy?: ConflictStrategy;
 }
 
 export class SyncEngine {
@@ -38,6 +39,7 @@ export class SyncEngine {
 	private readonly vault: SyncVault;
 	private readonly logger: Logger;
 	private readonly commitOptions: Omit<PushCommitOptions, "message">;
+	private readonly conflictStrategy: ConflictStrategy;
 	private syncPromise: Promise<SyncResult> | null = null;
 
 	constructor(options: SyncEngineOptions) {
@@ -47,6 +49,7 @@ export class SyncEngine {
 		this.vault = options.vault;
 		this.logger = options.logger;
 		this.commitOptions = options.commitOptions;
+		this.conflictStrategy = options.conflictStrategy ?? "skip";
 	}
 
 	get isSyncing(): boolean {
@@ -85,7 +88,7 @@ export class SyncEngine {
 
 		if (conflicts.length > 0) {
 			for (const conflict of conflicts) {
-				this.logger.warn("Conflict detected — skipping file in both pull and push", {
+				this.logger.warn(`Conflict detected — strategy: ${this.conflictStrategy}`, {
 					path: conflict.path,
 					localChange: conflict.localChange,
 					remoteChange: conflict.remoteChange,
@@ -93,11 +96,17 @@ export class SyncEngine {
 			}
 		}
 
-		// Pull with conflict paths excluded
-		const pull = await this.pullEngine.pull(this.commitOptions.branch, conflictPaths);
+		// Determine which sides get the conflicted files based on strategy
+		const pullSkipPaths =
+			this.conflictStrategy === "remote-wins" ? new Set<string>() : conflictPaths;
 
-		// Filter local changes to exclude conflicted files
-		const safePushChanges = localChanges.filter((c) => !conflictPaths.has(c.path));
+		const pull = await this.pullEngine.pull(this.commitOptions.branch, pullSkipPaths);
+
+		// Filter local changes: include conflicts only for local-wins
+		const safePushChanges = localChanges.filter((c) => {
+			if (!conflictPaths.has(c.path)) return true;
+			return this.conflictStrategy === "local-wins";
+		});
 
 		let push: PushResult | null = null;
 

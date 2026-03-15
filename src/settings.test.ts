@@ -257,12 +257,12 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates ten Setting instances", () => {
+		it("creates eleven Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
 			// token, owner, repo, branch, sync folder, test connection,
-			// auto-sync, auto-sync debounce, remote pull interval, log level
-			expect(getSettings()).toHaveLength(10);
+			// auto-sync, auto-sync debounce, remote pull interval, conflict strategy, log level
+			expect(getSettings()).toHaveLength(11);
 		});
 
 		it("creates settings with expected names", () => {
@@ -278,6 +278,7 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Auto-sync");
 			expect(names).toContain("Auto-sync debounce");
 			expect(names).toContain("Remote pull interval");
+			expect(names).toContain("Conflict strategy");
 			expect(names).toContain("Log level");
 		});
 
@@ -449,6 +450,32 @@ describe("GHVaultSettingTab", () => {
 			const logSetting = findSettingByName("Log level");
 			await logSetting.dropdownComponents[0].simulateChange("INVALID");
 			expect(settings.logLevel).toBe("info");
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+		});
+
+		it("renders Conflict strategy dropdown with current value", () => {
+			const { tab } = createTab({ conflictStrategy: "local-wins" });
+			tab.display();
+			const setting = findSettingByName("Conflict strategy");
+			expect(setting).toBeDefined();
+			expect(setting.dropdownComponents[0].getValue()).toBe("local-wins");
+		});
+
+		it("saves valid conflictStrategy on change", async () => {
+			const { tab, callbacks, settings } = createTab({ conflictStrategy: "skip" });
+			tab.display();
+			const setting = findSettingByName("Conflict strategy");
+			await setting.dropdownComponents[0].simulateChange("remote-wins");
+			expect(settings.conflictStrategy).toBe("remote-wins");
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("ignores invalid conflictStrategy values", async () => {
+			const { tab, callbacks, settings } = createTab({ conflictStrategy: "skip" });
+			tab.display();
+			const setting = findSettingByName("Conflict strategy");
+			await setting.dropdownComponents[0].simulateChange("INVALID");
+			expect(settings.conflictStrategy).toBe("skip");
 			expect(callbacks.onSave).not.toHaveBeenCalled();
 		});
 	});

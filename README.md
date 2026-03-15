@@ -29,7 +29,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Remote pull check** — periodically checks for remote changes and pulls them automatically, with adaptive backoff when idle
 - **Mobile-first** — works on iOS, Android, and desktop equally
 - **No git CLI** — uses GitHub REST API for reads and GraphQL `createCommitOnBranch` for writes
-- **Conflict detection** — files changed on both sides are skipped (not overwritten) and reported
+- **Conflict resolution** — configurable strategy for files changed on both sides: skip (default), local-wins, or remote-wins
 - **Automatic GPG signing** — commits made via GraphQL are signed by GitHub automatically
 - **Rate limit aware** — tracks GitHub API rate limits and pauses before hitting them
 - **SHA integrity checks** — verifies downloaded file content matches GitHub's reported SHA
@@ -85,6 +85,7 @@ Open Obsidian Settings → GHVault and fill in:
 | **Auto-sync** | Automatically sync when vault files change (default: off) |
 | **Auto-sync debounce** | Seconds to wait after last change before syncing (1–300, default: 10) |
 | **Remote pull interval** | Base interval in seconds to check for remote changes (30–3600, default: 300). Backs off automatically when idle. |
+| **Conflict strategy** | How to handle files changed on both sides: `skip` (default), `local-wins`, or `remote-wins` |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
 
 Use the **Test Connection** button to verify your settings before syncing.
@@ -133,7 +134,15 @@ Everything in your vault **except**:
 
 ### Conflict handling
 
-When the same file is changed both locally and on GitHub between syncs, GHVault **skips the file on both sides** and reports it as a conflict. Neither version is overwritten. This is the safest default — you can resolve conflicts manually.
+When the same file is changed both locally and on GitHub between syncs, GHVault resolves the conflict based on the configured strategy:
+
+| Strategy | Behavior |
+|----------|----------|
+| **Skip** (default) | Skip the file on both sides — neither version is overwritten |
+| **Local wins** | Push the local version to GitHub, overwriting the remote |
+| **Remote wins** | Pull the remote version to the vault, overwriting the local |
+
+The number of conflicts (or resolved files) is shown in the sync Notice.
 
 ## Limitations
 
