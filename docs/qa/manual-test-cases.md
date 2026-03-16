@@ -401,6 +401,30 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Scroll to bottom, click "Load more"
 **Expected:** Next 20 commits appended. Button hidden when no more.
 
+### TC-ZIP-001: First sync uses ZIP for large repo
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** syncFolder empty, remote repo with >5 files, total <100MB
+**Steps:**
+1. Fresh install, configure settings, sync
+**Expected:** Sync completes. All remote files pulled. Debug log shows "ZIP pull started".
+
+### TC-ZIP-002: ZIP fallback to per-file on error
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** syncFolder empty, >5 remote files
+**Steps:**
+1. Simulate ZIP download failure (e.g. network drop during download)
+**Expected:** Sync still completes via per-file fallback. Warning in log.
+
+### TC-ZIP-003: Subfolder sync uses per-file (not ZIP)
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** syncFolder = "docs", >5 remote files
+**Steps:**
+1. Sync
+**Expected:** Files pulled individually. No ZIP download attempt.
+
 ---
 
 ## Group H: Sync Folder

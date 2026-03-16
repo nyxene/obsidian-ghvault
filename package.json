@@ -45,5 +45,8 @@
 	},
 	"lint-staged": {
 		"*.{ts,json,md}": "biome check --write --no-errors-on-unmatched"
+	},
+	"dependencies": {
+		"fflate": "^0.8.2"
 	}
 }

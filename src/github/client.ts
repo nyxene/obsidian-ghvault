@@ -145,6 +145,23 @@ export class GitHubClient {
 		}));
 	}
 
+	async downloadZipball(ref: string): Promise<ArrayBuffer> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const url = `${BASE_URL}/repos/${owner}/${repo}/zipball/${encodeURIComponent(ref)}`;
+		const response = await requestWithTimeout({
+			url,
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${this.token}`,
+				"X-GitHub-Api-Version": API_VERSION,
+			},
+		});
+		this.rateLimiter.updateFromHeaders(response.headers);
+		return response.arrayBuffer;
+	}
+
 	async createFile(
 		path: string,
 		content: string,

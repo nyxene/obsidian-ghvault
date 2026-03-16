@@ -430,4 +430,30 @@ describe("GitHubClient", () => {
 			expect(commits).toEqual([]);
 		});
 	});
+
+	describe("downloadZipball", () => {
+		it("returns arrayBuffer from zipball endpoint", async () => {
+			const client = createClient();
+			const fakeZip = new ArrayBuffer(16);
+			mockRequest.mockResolvedValue({
+				json: null,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4998",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "",
+				arrayBuffer: fakeZip,
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const result = await client.downloadZipball("main");
+
+			expect(result).toBe(fakeZip);
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0];
+			const url = typeof arg === "string" ? arg : (arg as { url: string }).url;
+			expect(url).toContain("/zipball/main");
+		});
+	});
 });
