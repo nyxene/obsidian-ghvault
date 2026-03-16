@@ -125,7 +125,7 @@ On **first sync** with a non-empty vault and repo, GHVault compares content hash
 |-----------|-----|-----|
 | Read files, trees, refs | REST API | Granular access, works with large repos |
 | Create commits | GraphQL `createCommitOnBranch` | Batch multiple file changes in one commit, auto GPG sign |
-| First sync | Trees API + batch Contents API | Efficient initial download without cloning |
+| First sync | Trees API + ZIP download (or batch Contents API) | ZIP for full-repo (>5 files, <100MB), per-file for subfolders |
 
 ### What gets synced
 

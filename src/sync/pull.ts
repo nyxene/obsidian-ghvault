@@ -5,7 +5,8 @@ import { hasBinaryContent, toSafeArrayBuffer } from "../utils/binary";
 import { pMap } from "../utils/concurrency";
 import { computeGitBlobSha, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
-import { isSafePath, toRepoPath, toVaultPath } from "../utils/path";
+import { isExcluded, isSafePath, toRepoPath, toVaultPath } from "../utils/path";
+import { processZipEntries } from "../utils/zip";
 import { computeRemoteChanges } from "./comparator";
 import type { SyncStateManager } from "./state";
 
@@ -34,6 +35,8 @@ export interface PullEngineOptions {
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const PULL_CONCURRENCY = 8;
+const ZIP_MIN_FILES = 5;
+const ZIP_MAX_SIZE = 100 * 1024 * 1024; // 100MB
 
 export class PullEngine {
 	private readonly client: GitHubClient;
@@ -136,10 +139,12 @@ export class PullEngine {
 		const repoPathMap = this.buildRepoPathMap(treeEntries);
 
 		const treeSizeMap = new Map<string, number>();
+		const treeShaMap = new Map<string, string>();
 		for (const entry of mappedEntries) {
 			if (entry.size !== undefined) {
 				treeSizeMap.set(entry.path, entry.size);
 			}
+			treeShaMap.set(entry.path, entry.sha);
 		}
 
 		const cache = this.state.getAllSHAs();
@@ -226,62 +231,16 @@ export class PullEngine {
 			}
 		}
 
-		// Process downloads in parallel with controlled concurrency
-		await pMap(
-			downloads,
-			async (change) => {
-				try {
-					// Use repo path for API call (vault path + syncFolder prefix)
-					const repoPath = repoPathMap.get(change.path) ?? change.path;
-					const file = await this.client.getFileContent(repoPath, branch);
-					const rawBytes = decodeBase64ToBytes(file.content);
+		// Choose download strategy: ZIP for full-repo bulk downloads, per-file otherwise
+		const totalDownloadSize = downloads.reduce((sum, c) => sum + (treeSizeMap.get(c.path) ?? 0), 0);
+		const useZip =
+			!this.syncFolder && downloads.length > ZIP_MIN_FILES && totalDownloadSize <= ZIP_MAX_SIZE;
 
-					const blobSha = await computeGitBlobSha(rawBytes);
-					if (blobSha !== file.sha) {
-						this.logger.error("SHA integrity check failed", {
-							path: change.path,
-							expected: file.sha,
-							actual: blobSha,
-						});
-						result.errors.push({
-							path: change.path,
-							error: "SHA integrity check failed — content may be tampered",
-						});
-						return;
-					}
-
-					const isBinary = hasBinaryContent(rawBytes);
-					const contentHash = await computeHashFromBuffer(rawBytes);
-
-					if (isBinary) {
-						await this.vault.writeFileBinary(change.path, toSafeArrayBuffer(rawBytes));
-					} else {
-						const content = new TextDecoder().decode(rawBytes);
-						await this.vault.writeFile(change.path, content);
-					}
-
-					const entry: SHACacheEntry = {
-						remoteSha: file.sha,
-						localContentHash: contentHash,
-						lastSyncedAt: Date.now(),
-						size: file.size,
-						isBinary,
-					};
-					this.state.setSHA(change.path, entry);
-
-					if (change.type === "create") {
-						result.created.push(change.path);
-					} else {
-						result.modified.push(change.path);
-					}
-				} catch (error: unknown) {
-					const message = error instanceof Error ? error.message : String(error);
-					this.logger.error("Pull failed for file", { path: change.path, error: message });
-					result.errors.push({ path: change.path, error: message });
-				}
-			},
-			PULL_CONCURRENCY,
-		);
+		if (useZip) {
+			await this.pullViaZip(branch, ref.sha, downloads, treeShaMap, result);
+		} else {
+			await this.pullPerFile(branch, downloads, repoPathMap, result);
+		}
 
 		// Process deletes sequentially (fast, no HTTP)
 		for (const change of deletes) {
@@ -381,6 +340,161 @@ export class PullEngine {
 			}
 		}
 		return map;
+	}
+
+	private async pullViaZip(
+		branch: string,
+		refSha: string,
+		downloads: FileChange[],
+		treeShaMap: Map<string, string>,
+		result: PullResult,
+	): Promise<void> {
+		const downloadPaths = new Set(downloads.map((c) => c.path));
+		const downloadTypes = new Map(downloads.map((c) => [c.path, c.type]));
+
+		this.logger.info("ZIP pull started", { files: downloads.length, ref: refSha.slice(0, 8) });
+
+		let zipBuffer: ArrayBuffer;
+		try {
+			zipBuffer = await this.client.downloadZipball(refSha);
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logger.warn("ZIP download failed, falling back to per-file", { error: message });
+			await this.pullPerFile(branch, downloads, new Map(), result);
+			return;
+		}
+
+		try {
+			await processZipEntries(zipBuffer, async (path, data) => {
+				if (isExcluded(path)) return;
+				if (!downloadPaths.has(path)) return;
+				if (!isSafePath(path)) return;
+
+				const blobSha = await computeGitBlobSha(data);
+				const expectedSha = treeShaMap.get(path);
+				if (expectedSha && blobSha !== expectedSha) {
+					this.logger.error("SHA integrity check failed (ZIP)", {
+						path,
+						expected: expectedSha,
+						actual: blobSha,
+					});
+					result.errors.push({
+						path,
+						error: "SHA integrity check failed — content may be tampered",
+					});
+					return;
+				}
+
+				const isBinary = hasBinaryContent(data);
+				const contentHash = await computeHashFromBuffer(data);
+
+				if (isBinary) {
+					await this.vault.writeFileBinary(path, toSafeArrayBuffer(data));
+				} else {
+					const content = new TextDecoder().decode(data);
+					await this.vault.writeFile(path, content);
+				}
+
+				const cacheEntry: SHACacheEntry = {
+					remoteSha: expectedSha ?? blobSha,
+					localContentHash: contentHash,
+					lastSyncedAt: Date.now(),
+					size: data.length,
+					isBinary,
+				};
+				this.state.setSHA(path, cacheEntry);
+
+				const changeType = downloadTypes.get(path);
+				if (changeType === "create") {
+					result.created.push(path);
+				} else {
+					result.modified.push(path);
+				}
+
+				downloadPaths.delete(path);
+			});
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logger.warn("ZIP parse failed, falling back to per-file for remaining", {
+				error: message,
+			});
+		}
+
+		// Fallback: any files not found in ZIP → per-file download
+		if (downloadPaths.size > 0) {
+			const remaining = downloads.filter((c) => downloadPaths.has(c.path));
+			this.logger.info("ZIP fallback: per-file for missing entries", {
+				count: remaining.length,
+			});
+			await this.pullPerFile(branch, remaining, new Map(), result);
+		}
+
+		this.logger.info("ZIP pull complete", {
+			created: result.created.length,
+			modified: result.modified.length,
+		});
+	}
+
+	private async pullPerFile(
+		branch: string,
+		downloads: FileChange[],
+		repoPathMap: Map<string, string>,
+		result: PullResult,
+	): Promise<void> {
+		await pMap(
+			downloads,
+			async (change) => {
+				try {
+					const repoPath = repoPathMap.get(change.path) ?? change.path;
+					const file = await this.client.getFileContent(repoPath, branch);
+					const rawBytes = decodeBase64ToBytes(file.content);
+
+					const blobSha = await computeGitBlobSha(rawBytes);
+					if (blobSha !== file.sha) {
+						this.logger.error("SHA integrity check failed", {
+							path: change.path,
+							expected: file.sha,
+							actual: blobSha,
+						});
+						result.errors.push({
+							path: change.path,
+							error: "SHA integrity check failed — content may be tampered",
+						});
+						return;
+					}
+
+					const isBinary = hasBinaryContent(rawBytes);
+					const contentHash = await computeHashFromBuffer(rawBytes);
+
+					if (isBinary) {
+						await this.vault.writeFileBinary(change.path, toSafeArrayBuffer(rawBytes));
+					} else {
+						const content = new TextDecoder().decode(rawBytes);
+						await this.vault.writeFile(change.path, content);
+					}
+
+					const entry: SHACacheEntry = {
+						remoteSha: file.sha,
+						localContentHash: contentHash,
+						lastSyncedAt: Date.now(),
+						size: file.size,
+						isBinary,
+					};
+					this.state.setSHA(change.path, entry);
+
+					if (change.type === "create") {
+						result.created.push(change.path);
+					} else {
+						result.modified.push(change.path);
+					}
+				} catch (error: unknown) {
+					const message = error instanceof Error ? error.message : String(error);
+					this.logger.error("Pull failed for file", { path: change.path, error: message });
+					result.errors.push({ path: change.path, error: message });
+				}
+			},
+			PULL_CONCURRENCY,
+		);
 	}
 }
 
