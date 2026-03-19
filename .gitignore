@@ -48,3 +48,4 @@ docs/private/
 *.tgz
 *.tar.gz
 .cache/
+tests/e2e/artifacts/
