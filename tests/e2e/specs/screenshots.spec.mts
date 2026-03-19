@@ -1,7 +1,7 @@
 import { browser } from "@wdio/globals";
 import * as path from "node:path";
 
-const SCREENSHOT_DIR = path.resolve(import.meta.dirname, "../../../docs/screenshots");
+const SCREENSHOT_DIR = path.resolve(import.meta.dirname, "../artifacts");
 
 async function openPluginSettings(): Promise<void> {
 	await browser.executeObsidian(({ app }) => {
