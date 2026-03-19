@@ -40,6 +40,7 @@ export interface SyncEngineOptions {
 	commitOptions: Omit<PushCommitOptions, "message">;
 	conflictStrategy?: ConflictStrategy;
 	onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
+	excludePatterns?: readonly string[];
 }
 
 export class SyncEngine {
@@ -51,6 +52,7 @@ export class SyncEngine {
 	private readonly commitOptions: Omit<PushCommitOptions, "message">;
 	private readonly conflictStrategy: ConflictStrategy;
 	private readonly onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
+	private readonly excludePatterns?: readonly string[];
 	private syncPromise: Promise<SyncResult> | null = null;
 
 	constructor(options: SyncEngineOptions) {
@@ -62,6 +64,7 @@ export class SyncEngine {
 		this.commitOptions = options.commitOptions;
 		this.conflictStrategy = options.conflictStrategy ?? "skip";
 		this.onConflict = options.onConflict;
+		this.excludePatterns = options.excludePatterns;
 	}
 
 	get isSyncing(): boolean {
@@ -89,7 +92,7 @@ export class SyncEngine {
 		// Compute local changes BEFORE pull to enable conflict detection
 		const localFiles = await this.vault.listFiles();
 		const cache = this.state.getAllSHAs();
-		let localChanges = computeLocalChanges(localFiles, cache);
+		let localChanges = computeLocalChanges(localFiles, cache, this.excludePatterns);
 
 		// Get remote changes without applying them
 		let remoteChanges = await this.pullEngine.getRemoteChanges(this.commitOptions.branch);

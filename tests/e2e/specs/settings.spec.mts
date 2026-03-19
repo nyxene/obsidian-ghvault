@@ -290,6 +290,7 @@ describe("settings UI", () => {
 		expect(labels).toContain("Branch");
 		expect(labels).toContain("Sync folder");
 		expect(labels).toContain("Test connection");
+		expect(labels).toContain("Exclude patterns");
 		expect(labels).toContain("Log level");
 	});
 
@@ -341,5 +342,42 @@ describe("settings UI", () => {
 		await browser.pause(3000);
 		const resetText = await testBtn.getText();
 		expect(resetText).toBe("Test");
+	});
+
+	it("exclude patterns textarea is visible with correct placeholder", async () => {
+		const textarea = await browser.$(".ghvault-settings textarea");
+		expect(await textarea.isDisplayed()).toBe(true);
+		const placeholder = await textarea.getAttribute("placeholder");
+		expect(placeholder).toContain("drafts/**");
+	});
+
+	it("exclude patterns saves to plugin settings", async () => {
+		const textarea = await browser.$(".ghvault-settings textarea");
+		await textarea.setValue("drafts/**\n*.tmp");
+		await browser.pause(300);
+
+		const settings = await browser.executeObsidian(({ plugins }) => {
+			const plugin = plugins.ghvault as any;
+			return plugin.settings.excludePatterns;
+		});
+		expect(settings).toBe("drafts/**\n*.tmp");
+	});
+
+	it("exclude patterns persists after reload", async () => {
+		// Set patterns
+		const textarea = await browser.$(".ghvault-settings textarea");
+		await textarea.setValue("private/**");
+		await browser.pause(500);
+
+		await closeSettings();
+		await browser.reloadObsidian();
+		await browser.pause(500);
+		await openPluginSettings();
+
+		const value = await browser.executeObsidian(({ plugins }) => {
+			const plugin = plugins.ghvault as any;
+			return plugin.settings.excludePatterns;
+		});
+		expect(value).toBe("private/**");
 	});
 });

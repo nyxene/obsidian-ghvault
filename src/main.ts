@@ -26,7 +26,7 @@ import {
 import { ConflictModal } from "./ui/conflict-modal";
 import { FileHistoryModal } from "./ui/file-history-modal";
 import { Logger } from "./utils/logger";
-import { toRepoPath } from "./utils/path";
+import { getEffectiveExcludePatterns, toRepoPath } from "./utils/path";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
 const VALID_CHANGE_TYPES = new Set<string>(["create", "modify", "delete"]);
@@ -147,7 +147,8 @@ export default class GHVaultPlugin extends Plugin {
 			saveData: (data) => this.saveData(data),
 		});
 
-		const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
+		const excludePatterns = getEffectiveExcludePatterns(this.settings.excludePatterns);
+		const vaultAdapter = new ObsidianVaultAdapter(this.app.vault, excludePatterns);
 
 		const pullEngine = new PullEngine({
 			client,
@@ -155,6 +156,7 @@ export default class GHVaultPlugin extends Plugin {
 			vault: vaultAdapter,
 			logger,
 			syncFolder,
+			excludePatterns,
 		});
 
 		const pushEngine = new PushEngine({
@@ -174,6 +176,7 @@ export default class GHVaultPlugin extends Plugin {
 			commitOptions: { branch, owner, repo },
 			conflictStrategy: this.settings.conflictStrategy,
 			onConflict: (conflicts) => this.showConflictModal(conflicts),
+			excludePatterns,
 		});
 
 		this.githubClient = client;
@@ -295,6 +298,7 @@ export default class GHVaultPlugin extends Plugin {
 			onPersist: (pending) => {
 				this.persistPendingChanges(pending);
 			},
+			excludePatterns: getEffectiveExcludePatterns(this.settings.excludePatterns),
 		});
 
 		this.eventRefs = [
@@ -486,6 +490,10 @@ export default class GHVaultPlugin extends Plugin {
 				)
 					? (raw.conflictStrategy as ConflictStrategy)
 					: DEFAULT_SETTINGS.conflictStrategy,
+				excludePatterns:
+					typeof raw.excludePatterns === "string"
+						? raw.excludePatterns
+						: DEFAULT_SETTINGS.excludePatterns,
 			};
 		}
 	}

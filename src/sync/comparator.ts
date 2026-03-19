@@ -23,12 +23,13 @@ export interface LocalFileInfo {
 export function computeLocalChanges(
 	localFiles: LocalFileInfo[],
 	cache: Readonly<Record<string, SHACacheEntry>>,
+	patterns?: readonly string[],
 ): FileChange[] {
 	const changes: FileChange[] = [];
 	const localPaths = new Set<string>();
 
 	for (const file of localFiles) {
-		if (isExcluded(file.path)) continue;
+		if (isExcluded(file.path, patterns)) continue;
 		localPaths.add(file.path);
 
 		const cached = cache[file.path];
@@ -40,7 +41,7 @@ export function computeLocalChanges(
 	}
 
 	for (const path of Object.keys(cache)) {
-		if (isExcluded(path)) continue;
+		if (isExcluded(path, patterns)) continue;
 		if (!localPaths.has(path)) {
 			changes.push({ path, type: "delete" });
 		}
@@ -58,13 +59,14 @@ export function computeLocalChanges(
 export function computeRemoteChanges(
 	remoteTree: GitHubTreeEntry[],
 	cache: Readonly<Record<string, SHACacheEntry>>,
+	patterns?: readonly string[],
 ): FileChange[] {
 	const changes: FileChange[] = [];
 	const remotePaths = new Set<string>();
 
 	for (const entry of remoteTree) {
 		if (entry.type !== "blob") continue;
-		if (isExcluded(entry.path)) continue;
+		if (isExcluded(entry.path, patterns)) continue;
 		remotePaths.add(entry.path);
 
 		const cached = cache[entry.path];
@@ -76,7 +78,7 @@ export function computeRemoteChanges(
 	}
 
 	for (const path of Object.keys(cache)) {
-		if (isExcluded(path)) continue;
+		if (isExcluded(path, patterns)) continue;
 		if (!remotePaths.has(path)) {
 			changes.push({ path, type: "delete" });
 		}
