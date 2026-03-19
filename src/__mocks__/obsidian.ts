@@ -289,6 +289,12 @@ export class Setting {
 		this.buttonComponents.push(button);
 		return this;
 	}
+	addTextArea(cb: (text: TextComponent) => unknown): this {
+		const text = new TextComponent();
+		cb(text);
+		this.textComponents.push(text);
+		return this;
+	}
 }
 
 export interface EventRef {

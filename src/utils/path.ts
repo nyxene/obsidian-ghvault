@@ -27,6 +27,22 @@ export function isSafePath(path: string): boolean {
 	return true;
 }
 
+const VALID_PATTERN_RE = /^(\*\*\/)?[a-zA-Z0-9._\-/]+(\*\*)?$|^\*\.[a-zA-Z0-9]+$/;
+
+export function isValidExcludePattern(pattern: string): boolean {
+	if (!pattern || pattern.startsWith("#")) return true;
+	return VALID_PATTERN_RE.test(pattern);
+}
+
+export function getEffectiveExcludePatterns(userInput?: string): string[] {
+	if (!userInput) return [...EXCLUDED_PATTERNS];
+	const userPatterns = userInput
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "" && !line.startsWith("#"));
+	return [...EXCLUDED_PATTERNS, ...userPatterns];
+}
+
 export function isExcluded(
 	path: string,
 	patterns: ReadonlyArray<string> = EXCLUDED_PATTERNS,

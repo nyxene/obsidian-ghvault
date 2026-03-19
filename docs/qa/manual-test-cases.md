@@ -425,6 +425,32 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Sync
 **Expected:** Files pulled individually. No ZIP download attempt.
 
+### TC-EXCL-001: Custom exclude pattern prevents sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Settings → Exclude patterns = "drafts/**"
+**Steps:**
+1. Create `drafts/note.md` in vault
+2. Sync
+**Expected:** `drafts/note.md` is NOT pushed to GitHub.
+
+### TC-EXCL-002: Custom exclude pattern with extension
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Settings → Exclude patterns = "*.pdf"
+**Steps:**
+1. Create `report.pdf` in vault
+2. Sync
+**Expected:** `report.pdf` is NOT pushed. Other files sync normally.
+
+### TC-EXCL-003: Hardcoded excludes still work with custom patterns
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Settings → Exclude patterns = "drafts/**"
+**Steps:**
+1. Sync
+**Expected:** `.obsidian/`, `.trash/`, `ghvault.log` still excluded. `drafts/` also excluded.
+
 ---
 
 ## Group H: Sync Folder

@@ -31,6 +31,7 @@ export interface PullEngineOptions {
 	vault: VaultAdapter;
 	logger: Logger;
 	syncFolder: string;
+	excludePatterns?: readonly string[];
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -44,6 +45,7 @@ export class PullEngine {
 	private readonly vault: VaultAdapter;
 	private readonly logger: Logger;
 	private readonly syncFolder: string;
+	private readonly excludePatterns?: readonly string[];
 
 	constructor(options: PullEngineOptions) {
 		this.client = options.client;
@@ -51,6 +53,7 @@ export class PullEngine {
 		this.vault = options.vault;
 		this.logger = options.logger;
 		this.syncFolder = options.syncFolder;
+		this.excludePatterns = options.excludePatterns;
 	}
 
 	private lastMappedTree: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
@@ -84,7 +87,7 @@ export class PullEngine {
 		this.lastMappedTree = mappedEntries;
 
 		const cache = this.state.getAllSHAs();
-		return computeRemoteChanges(mappedEntries, cache);
+		return computeRemoteChanges(mappedEntries, cache, this.excludePatterns);
 	}
 
 	async pull(
@@ -148,7 +151,7 @@ export class PullEngine {
 		}
 
 		const cache = this.state.getAllSHAs();
-		const allChanges = computeRemoteChanges(mappedEntries, cache);
+		const allChanges = computeRemoteChanges(mappedEntries, cache, this.excludePatterns);
 
 		const changes = skipPaths?.size ? allChanges.filter((c) => !skipPaths.has(c.path)) : allChanges;
 
@@ -366,7 +369,7 @@ export class PullEngine {
 
 		try {
 			await processZipEntries(zipBuffer, async (path, data) => {
-				if (isExcluded(path)) return;
+				if (isExcluded(path, this.excludePatterns)) return;
 				if (!downloadPaths.has(path)) return;
 				if (!isSafePath(path)) return;
 

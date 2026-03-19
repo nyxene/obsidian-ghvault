@@ -1,7 +1,7 @@
 import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
 import type { ConflictStrategy, GHVaultSettings, LogLevel } from "./types";
 import { VALID_CONFLICT_STRATEGIES, VALID_LOG_LEVELS } from "./types";
-import { normalizePath } from "./utils/path";
+import { isValidExcludePattern, normalizePath } from "./utils/path";
 
 export function sanitizeSlug(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._-]/g, "");
@@ -77,6 +77,52 @@ function pullIntervalDesc(current: number, rawInput?: string): string {
 		}
 	}
 	return `Base interval to check for remote changes (30–3600). Backs off when idle.`;
+}
+
+function excludeDesc(rawValue: string): string {
+	return validateExcludePatterns(rawValue).desc;
+}
+
+function validateExcludePatterns(rawValue: string): {
+	desc: string;
+	cleanValue: string;
+	hasErrors: boolean;
+} {
+	if (!rawValue.trim()) {
+		return {
+			desc: "Glob patterns to exclude from sync, one per line. Formats: dir/**, *.ext, **/name, exact/path",
+			cleanValue: "",
+			hasErrors: false,
+		};
+	}
+	const allLines = rawValue.split("\n");
+	const valid: string[] = [];
+	const invalid: string[] = [];
+	for (const raw of allLines) {
+		const line = raw.trim();
+		if (!line || line.startsWith("#")) {
+			valid.push(raw);
+			continue;
+		}
+		if (isValidExcludePattern(line)) {
+			valid.push(raw);
+		} else {
+			invalid.push(line);
+		}
+	}
+	if (invalid.length > 0) {
+		return {
+			desc: `⚠ Invalid pattern${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")}. Use: dir/**, *.ext, **/name, or exact/path`,
+			cleanValue: valid.join("\n"),
+			hasErrors: true,
+		};
+	}
+	const activeCount = valid.map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).length;
+	return {
+		desc: `${activeCount} custom pattern${activeCount === 1 ? "" : "s"} active`,
+		cleanValue: rawValue,
+		hasErrors: false,
+	};
 }
 
 export interface SettingTabCallbacks {
@@ -286,6 +332,25 @@ export class GHVaultSettingTab extends PluginSettingTab {
 							this.settings.conflictStrategy = value as ConflictStrategy;
 							await this.callbacks.onSave(this.settings);
 						}
+					}),
+			);
+
+		const excludeSetting = new Setting(containerEl)
+			.setName("Exclude patterns")
+			.setDesc(excludeDesc(this.settings.excludePatterns))
+			.addTextArea((text) =>
+				text
+					.setPlaceholder("drafts/**\n*.tmp\nprivate/**")
+					.setValue(this.settings.excludePatterns)
+					.onChange(async (value) => {
+						const validation = validateExcludePatterns(value);
+						excludeSetting.setDesc(validation.desc);
+						const descEl = excludeSetting.descEl;
+						if (descEl) {
+							descEl.style.color = validation.hasErrors ? "var(--text-error)" : "";
+						}
+						this.settings.excludePatterns = validation.cleanValue;
+						await this.callbacks.onSave(this.settings);
 					}),
 			);
 

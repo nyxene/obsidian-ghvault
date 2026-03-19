@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isExcluded, isSafePath, normalizePath, toRepoPath, toVaultPath } from "./path";
+import {
+	getEffectiveExcludePatterns,
+	isExcluded,
+	isSafePath,
+	isValidExcludePattern,
+	normalizePath,
+	toRepoPath,
+	toVaultPath,
+} from "./path";
 
 describe("normalizePath", () => {
 	it("replaces backslashes", () => {
@@ -186,5 +194,83 @@ describe("isSafePath", () => {
 	it("allows paths with dots in filenames", () => {
 		expect(isSafePath("file.test.md")).toBe(true);
 		expect(isSafePath(".hidden/file.md")).toBe(true);
+	});
+});
+
+describe("getEffectiveExcludePatterns", () => {
+	it("returns hardcoded patterns when input is empty", () => {
+		const patterns = getEffectiveExcludePatterns("");
+		expect(patterns).toContain(".obsidian/**");
+		expect(patterns).toContain(".trash/**");
+		expect(patterns).toContain("ghvault.log");
+		expect(patterns).toContain(".ghvault");
+	});
+
+	it("returns hardcoded patterns when input is undefined", () => {
+		const patterns = getEffectiveExcludePatterns(undefined);
+		expect(patterns).toContain(".obsidian/**");
+	});
+
+	it("merges user patterns with hardcoded", () => {
+		const patterns = getEffectiveExcludePatterns("drafts/**\n*.tmp");
+		expect(patterns).toContain(".obsidian/**");
+		expect(patterns).toContain("drafts/**");
+		expect(patterns).toContain("*.tmp");
+	});
+
+	it("trims whitespace and skips empty lines", () => {
+		const patterns = getEffectiveExcludePatterns("  drafts/**  \n\n  *.bak  \n");
+		expect(patterns).toContain("drafts/**");
+		expect(patterns).toContain("*.bak");
+		expect(patterns.filter((p) => p === "")).toHaveLength(0);
+	});
+
+	it("skips comment lines starting with #", () => {
+		const patterns = getEffectiveExcludePatterns("# My excludes\ndrafts/**\n# Another comment");
+		expect(patterns).toContain("drafts/**");
+		expect(patterns.some((p) => p.startsWith("#"))).toBe(false);
+	});
+
+	it("works with user patterns in isExcluded", () => {
+		const patterns = getEffectiveExcludePatterns("private/**\n*.pdf");
+		expect(isExcluded("private/secret.md", patterns)).toBe(true);
+		expect(isExcluded("docs/report.pdf", patterns)).toBe(true);
+		expect(isExcluded("docs/notes.md", patterns)).toBe(false);
+		// Hardcoded still work
+		expect(isExcluded(".obsidian/config.json", patterns)).toBe(true);
+	});
+});
+
+describe("isValidExcludePattern", () => {
+	it("accepts dir/** patterns", () => {
+		expect(isValidExcludePattern("drafts/**")).toBe(true);
+		expect(isValidExcludePattern("a/b/c/**")).toBe(true);
+	});
+
+	it("accepts *.ext patterns", () => {
+		expect(isValidExcludePattern("*.tmp")).toBe(true);
+		expect(isValidExcludePattern("*.pdf")).toBe(true);
+	});
+
+	it("accepts **/name patterns", () => {
+		expect(isValidExcludePattern("**/node_modules")).toBe(true);
+		expect(isValidExcludePattern("**/.git")).toBe(true);
+	});
+
+	it("accepts exact path patterns", () => {
+		expect(isValidExcludePattern("secret/data.json")).toBe(true);
+		expect(isValidExcludePattern("file.txt")).toBe(true);
+	});
+
+	it("accepts comments and empty", () => {
+		expect(isValidExcludePattern("# comment")).toBe(true);
+		expect(isValidExcludePattern("")).toBe(true);
+	});
+
+	it("rejects patterns with special characters", () => {
+		expect(isValidExcludePattern("&&%$]")).toBe(false);
+		expect(isValidExcludePattern("file[0].md")).toBe(false);
+		expect(isValidExcludePattern("path with spaces")).toBe(false);
+		expect(isValidExcludePattern("$(command)")).toBe(false);
 	});
 });

@@ -36,7 +36,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Rate limit aware** — tracks GitHub API rate limits and pauses before hitting them
 - **SHA integrity checks** — verifies downloaded file content matches GitHub's reported SHA
 - **Subfolder sync** — sync a specific folder in the repo instead of the entire repository
-- **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced
+- **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced, plus custom exclude patterns (e.g. `drafts/**`, `*.tmp`)
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
 - **Crash recovery** — pending changes are persisted to disk and restored after restart
 
@@ -88,6 +88,7 @@ Open Obsidian Settings → GHVault and fill in:
 | **Auto-sync debounce** | Seconds to wait after last change before syncing (1–300, default: 10) |
 | **Remote pull interval** | Base interval in seconds to check for remote changes (30–3600, default: 300). Backs off automatically when idle. |
 | **Conflict strategy** | How to handle files changed on both sides: `skip` (default), `local-wins`, `remote-wins`, or `ask` (per-file modal) |
+| **Exclude patterns** | Custom glob patterns to exclude from sync, one per line (e.g. `drafts/**`, `*.tmp`) |
 | **Log Level** | `info`, `debug`, `warn`, or `error` |
 
 Use the **Test Connection** button to verify your settings before syncing.

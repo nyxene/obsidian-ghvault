@@ -5,6 +5,7 @@ export interface ChangeQueueOptions {
 	debounceMs: number;
 	onReady: () => void;
 	onPersist?: (pending: Record<string, ChangeType>) => void;
+	excludePatterns?: readonly string[];
 }
 
 export class ChangeQueue {
@@ -13,6 +14,7 @@ export class ChangeQueue {
 	private readonly debounceMs: number;
 	private readonly onReady: () => void;
 	private readonly onPersist?: (pending: Record<string, ChangeType>) => void;
+	private readonly excludePatterns?: readonly string[];
 	private persistScheduled = false;
 	private paused = false;
 
@@ -20,10 +22,11 @@ export class ChangeQueue {
 		this.debounceMs = options.debounceMs;
 		this.onReady = options.onReady;
 		this.onPersist = options.onPersist;
+		this.excludePatterns = options.excludePatterns;
 	}
 
 	push(path: string, type: ChangeType): void {
-		if (isExcluded(path)) return;
+		if (isExcluded(path, this.excludePatterns)) return;
 
 		const existing = this.pending.get(path);
 		if (existing) {

@@ -13,6 +13,7 @@ export interface GHVaultSettings {
 	autoSyncDebounce: number;
 	autoSyncPullInterval: number;
 	conflictStrategy: ConflictStrategy;
+	excludePatterns: string;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -191,4 +192,5 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	autoSyncDebounce: 10,
 	autoSyncPullInterval: 300,
 	conflictStrategy: "skip",
+	excludePatterns: "",
 };
