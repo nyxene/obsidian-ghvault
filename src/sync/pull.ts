@@ -78,6 +78,9 @@ export class PullEngine {
 		try {
 			const tree = await this.client.getTree(commit.treeSha, true);
 			treeEntries = tree.entries;
+			if (tree.truncated) {
+				this.logger.warn("Tree response truncated — some files may be missed");
+			}
 		} catch (error: unknown) {
 			if (!(error instanceof GitHubNotFoundError)) throw error;
 		}

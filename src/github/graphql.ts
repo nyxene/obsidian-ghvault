@@ -58,6 +58,13 @@ export class GitHubGraphQL {
 		let headOid = options.expectedHeadOid;
 		let result: GitHubCommitResult = { oid: "", url: "" };
 
+		if (chunks.length > 1) {
+			this.logger.info("Push chunked", {
+				chunks: chunks.length,
+				totalFiles: options.additions.length,
+			});
+		}
+
 		for (let i = 0; i < chunks.length; i++) {
 			const isFirst = i === 0;
 			const isMultiChunk = chunks.length > 1;

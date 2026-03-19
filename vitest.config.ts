@@ -9,7 +9,7 @@ export default defineConfig({
 	},
 	test: {
 		globals: false,
-		exclude: ["node_modules/**", "tests/e2e/**"],
+		exclude: ["node_modules/**", "tests/e2e/**", ".claude/**"],
 		coverage: {
 			provider: "v8",
 			include: ["src/**/*.ts"],

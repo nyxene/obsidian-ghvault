@@ -5,6 +5,7 @@ import type {
 	RenameInfo,
 	SHACacheEntry,
 } from "../types";
+import { pMap } from "../utils/concurrency";
 import { isExcluded } from "../utils/path";
 
 export interface LocalFileInfo {
@@ -114,23 +115,26 @@ export function detectLocalRenames(
 	const creates = changes.filter((c) => c.type === "create");
 	if (deletes.length === 0 || creates.length === 0) return [];
 
+	// Build hash map: contentHash → create path (first match wins)
 	const localHashByPath = new Map(localFiles.map((f) => [f.path, f.contentHash]));
-	const usedCreates = new Set<string>();
+	const createByHash = new Map<string, string>();
+	for (const cre of creates) {
+		const hash = localHashByPath.get(cre.path);
+		if (hash && !createByHash.has(hash)) {
+			createByHash.set(hash, cre.path);
+		}
+	}
+
 	const renames: RenameInfo[] = [];
+	const usedCreates = new Set<string>();
 
 	for (const del of deletes) {
 		const cached = cache[del.path];
 		if (!cached) continue;
-		const deletedHash = cached.localContentHash;
-
-		for (const cre of creates) {
-			if (usedCreates.has(cre.path)) continue;
-			const createdHash = localHashByPath.get(cre.path);
-			if (createdHash === deletedHash) {
-				renames.push({ oldPath: del.path, newPath: cre.path });
-				usedCreates.add(cre.path);
-				break;
-			}
+		const newPath = createByHash.get(cached.localContentHash);
+		if (newPath && !usedCreates.has(newPath)) {
+			renames.push({ oldPath: del.path, newPath });
+			usedCreates.add(newPath);
 		}
 	}
 
@@ -151,6 +155,7 @@ export function detectRemoteRenames(
 	const creates = changes.filter((c) => c.type === "create");
 	if (deletes.length === 0 || creates.length === 0) return [];
 
+	// Build hash map: remoteSha → create path (first match wins)
 	const remoteShaByPath = new Map<string, string>();
 	for (const entry of remoteTree) {
 		if (entry.type === "blob") {
@@ -158,22 +163,24 @@ export function detectRemoteRenames(
 		}
 	}
 
-	const usedCreates = new Set<string>();
+	const createBySha = new Map<string, string>();
+	for (const cre of creates) {
+		const sha = remoteShaByPath.get(cre.path);
+		if (sha && !createBySha.has(sha)) {
+			createBySha.set(sha, cre.path);
+		}
+	}
+
 	const renames: RenameInfo[] = [];
+	const usedCreates = new Set<string>();
 
 	for (const del of deletes) {
 		const cached = cache[del.path];
 		if (!cached) continue;
-		const deletedSha = cached.remoteSha;
-
-		for (const cre of creates) {
-			if (usedCreates.has(cre.path)) continue;
-			const createdSha = remoteShaByPath.get(cre.path);
-			if (createdSha === deletedSha) {
-				renames.push({ oldPath: del.path, newPath: cre.path });
-				usedCreates.add(cre.path);
-				break;
-			}
+		const newPath = createBySha.get(cached.remoteSha);
+		if (newPath && !usedCreates.has(newPath)) {
+			renames.push({ oldPath: del.path, newPath });
+			usedCreates.add(newPath);
 		}
 	}
 
@@ -208,23 +215,27 @@ export async function reconcileFirstSync(
 	const identicalPaths = new Set<string>();
 	const cacheEntries: Record<string, SHACacheEntry> = {};
 
-	for (const path of overlapping) {
-		const localFile = localFileByPath.get(path);
-		if (!localFile) continue;
+	await pMap(
+		overlapping,
+		async (path) => {
+			const localFile = localFileByPath.get(path);
+			if (!localFile) return;
 
-		const remote = await getRemoteFileHash(path);
+			const remote = await getRemoteFileHash(path);
 
-		if (localFile.contentHash === remote.contentHash) {
-			identicalPaths.add(path);
-			cacheEntries[path] = {
-				remoteSha: remote.remoteSha,
-				localContentHash: localFile.contentHash,
-				lastSyncedAt: Date.now(),
-				size: remote.size,
-				isBinary: remote.isBinary,
-			};
-		}
-	}
+			if (localFile.contentHash === remote.contentHash) {
+				identicalPaths.add(path);
+				cacheEntries[path] = {
+					remoteSha: remote.remoteSha,
+					localContentHash: localFile.contentHash,
+					lastSyncedAt: Date.now(),
+					size: remote.size,
+					isBinary: remote.isBinary,
+				};
+			}
+		},
+		8,
+	);
 
 	return {
 		localChanges: localChanges.filter((c) => !identicalPaths.has(c.path)),
