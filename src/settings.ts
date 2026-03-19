@@ -33,50 +33,71 @@ export function validateSyncFolder(value: string): SyncFolderValidation {
 
 const SYNC_FOLDER_HINT = "Relative path using forward slashes, e.g. docs/vault";
 
-function syncFolderDesc(rawValue: string): string {
+interface DescResult {
+	desc: string;
+	hasError: boolean;
+}
+
+function syncFolderDesc(rawValue: string): DescResult {
 	if (!rawValue.trim()) {
-		return "Folder inside the repo to sync. Leave empty to sync entire repo.";
+		return {
+			desc: "Folder inside the repo to sync. Leave empty to sync entire repo.",
+			hasError: false,
+		};
 	}
 	const validation = validateSyncFolder(rawValue);
 	if (validation.hasTraversal) {
-		return `⚠ Path must not contain "..". Resolved: ${validation.sanitized || "(empty)"}. ${SYNC_FOLDER_HINT}`;
+		return {
+			desc: `⚠ Path must not contain "..". Resolved: ${validation.sanitized || "(empty)"}. ${SYNC_FOLDER_HINT}`,
+			hasError: true,
+		};
 	}
 	if (validation.sanitized !== rawValue) {
-		return `Will sync: ${validation.sanitized}/. ${SYNC_FOLDER_HINT}`;
+		return { desc: `Will sync: ${validation.sanitized}/. ${SYNC_FOLDER_HINT}`, hasError: false };
 	}
-	return `Will sync: ${validation.sanitized}/`;
+	return { desc: `Will sync: ${validation.sanitized}/`, hasError: false };
 }
 
-function debounceDesc(current: number, rawInput?: string): string {
+function debounceDesc(current: number, rawInput?: string): DescResult {
 	if (rawInput !== undefined) {
 		const num = Number.parseInt(rawInput, 10);
 		if (rawInput === "" || Number.isNaN(num)) {
-			return `⚠ Enter 1–300. Active: ${current}s`;
+			return { desc: `⚠ Enter 1–300. Active: ${current}s`, hasError: true };
 		}
 		if (num < 1) {
-			return `⚠ Min 1s. Active: ${current}s`;
+			return { desc: `⚠ Min 1s. Active: ${current}s`, hasError: true };
 		}
 		if (num > 300) {
-			return `⚠ Max 300s. Active: ${current}s`;
+			return { desc: `⚠ Max 300s. Active: ${current}s`, hasError: true };
 		}
 	}
-	return `Seconds to wait after last change (1–300)`;
+	return { desc: "Seconds to wait after last change (1–300)", hasError: false };
 }
 
-function pullIntervalDesc(current: number, rawInput?: string): string {
+function pullIntervalDesc(current: number, rawInput?: string): DescResult {
 	if (rawInput !== undefined) {
 		const num = Number.parseInt(rawInput, 10);
 		if (rawInput === "" || Number.isNaN(num)) {
-			return `⚠ Enter 30–3600. Active: ${current}s`;
+			return { desc: `⚠ Enter 30–3600. Active: ${current}s`, hasError: true };
 		}
 		if (num < 30) {
-			return `⚠ Min 30s. Active: ${current}s`;
+			return { desc: `⚠ Min 30s. Active: ${current}s`, hasError: true };
 		}
 		if (num > 3600) {
-			return `⚠ Max 3600s. Active: ${current}s`;
+			return { desc: `⚠ Max 3600s. Active: ${current}s`, hasError: true };
 		}
 	}
-	return `Base interval to check for remote changes (30–3600). Backs off when idle.`;
+	return {
+		desc: "Base interval to check for remote changes (30–3600). Backs off when idle.",
+		hasError: false,
+	};
+}
+
+function applyDescStyle(setting: Setting, result: DescResult): void {
+	setting.setDesc(result.desc);
+	if (setting.descEl) {
+		setting.descEl.style.color = result.hasError ? "var(--text-error)" : "";
+	}
 }
 
 function excludeDesc(rawValue: string): string {
@@ -218,20 +239,18 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		const syncFolderSetting = new Setting(containerEl)
-			.setName("Sync folder")
-			.setDesc(syncFolderDesc(this.settings.syncFolder))
-			.addText((text) =>
-				text
-					.setPlaceholder("docs/vault")
-					.setValue(this.settings.syncFolder)
-					.onChange(async (value) => {
-						const validation = validateSyncFolder(value);
-						this.settings.syncFolder = validation.sanitized;
-						syncFolderSetting.setDesc(syncFolderDesc(value));
-						await this.callbacks.onSave(this.settings);
-					}),
-			);
+		const syncFolderSetting = new Setting(containerEl).setName("Sync folder").addText((text) =>
+			text
+				.setPlaceholder("docs/vault")
+				.setValue(this.settings.syncFolder)
+				.onChange(async (value) => {
+					const validation = validateSyncFolder(value);
+					this.settings.syncFolder = validation.sanitized;
+					applyDescStyle(syncFolderSetting, syncFolderDesc(value));
+					await this.callbacks.onSave(this.settings);
+				}),
+		);
+		applyDescStyle(syncFolderSetting, syncFolderDesc(this.settings.syncFolder));
 
 		new Setting(containerEl)
 			.setName("Test connection")
@@ -269,7 +288,6 @@ export class GHVaultSettingTab extends PluginSettingTab {
 
 		const debounceSetting = new Setting(containerEl)
 			.setName("Auto-sync debounce")
-			.setDesc(debounceDesc(this.settings.autoSyncDebounce))
 			.addText((text) => {
 				text
 					.setPlaceholder("10")
@@ -277,22 +295,22 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						const num = Number.parseInt(value, 10);
 						if (Number.isNaN(num) || num < 1 || num > 300) {
-							debounceSetting.setDesc(debounceDesc(this.settings.autoSyncDebounce, value));
+							applyDescStyle(debounceSetting, debounceDesc(this.settings.autoSyncDebounce, value));
 							return;
 						}
 						this.settings.autoSyncDebounce = num;
-						debounceSetting.setDesc(debounceDesc(num));
+						applyDescStyle(debounceSetting, debounceDesc(num));
 						await this.callbacks.onSave(this.settings);
 					});
 				text.inputEl.addEventListener("blur", () => {
 					text.setValue(String(this.settings.autoSyncDebounce));
-					debounceSetting.setDesc(debounceDesc(this.settings.autoSyncDebounce));
+					applyDescStyle(debounceSetting, debounceDesc(this.settings.autoSyncDebounce));
 				});
 			});
+		applyDescStyle(debounceSetting, debounceDesc(this.settings.autoSyncDebounce));
 
 		const pullIntervalSetting = new Setting(containerEl)
 			.setName("Remote pull interval")
-			.setDesc(pullIntervalDesc(this.settings.autoSyncPullInterval))
 			.addText((text) => {
 				text
 					.setPlaceholder("300")
@@ -300,20 +318,22 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						const num = Number.parseInt(value, 10);
 						if (Number.isNaN(num) || num < 30 || num > 3600) {
-							pullIntervalSetting.setDesc(
+							applyDescStyle(
+								pullIntervalSetting,
 								pullIntervalDesc(this.settings.autoSyncPullInterval, value),
 							);
 							return;
 						}
 						this.settings.autoSyncPullInterval = num;
-						pullIntervalSetting.setDesc(pullIntervalDesc(num));
+						applyDescStyle(pullIntervalSetting, pullIntervalDesc(num));
 						await this.callbacks.onSave(this.settings);
 					});
 				text.inputEl.addEventListener("blur", () => {
 					text.setValue(String(this.settings.autoSyncPullInterval));
-					pullIntervalSetting.setDesc(pullIntervalDesc(this.settings.autoSyncPullInterval));
+					applyDescStyle(pullIntervalSetting, pullIntervalDesc(this.settings.autoSyncPullInterval));
 				});
 			});
+		applyDescStyle(pullIntervalSetting, pullIntervalDesc(this.settings.autoSyncPullInterval));
 
 		new Setting(containerEl)
 			.setName("Conflict strategy")
