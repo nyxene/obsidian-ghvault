@@ -451,6 +451,22 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Sync
 **Expected:** `.obsidian/`, `.trash/`, `ghvault.log` still excluded. `drafts/` also excluded.
 
+### TC-PERF-001: First sync with 100+ files completes
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Empty vault, remote repo with 100+ files, syncFolder empty
+**Steps:**
+1. Sync
+**Expected:** All files pulled. No timeout. Debug log shows ZIP or parallel download.
+
+### TC-PERF-002: Push 50+ changed files
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** 50+ local files changed since last sync
+**Steps:**
+1. Sync
+**Expected:** Push completes. If chunked, log shows "Push chunked: N chunks".
+
 ---
 
 ## Group H: Sync Folder
