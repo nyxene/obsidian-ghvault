@@ -363,6 +363,141 @@ describe("settings UI", () => {
 		expect(settings).toBe("drafts/**\n*.tmp");
 	});
 
+	it("syncFolder shows red error for path traversal", async () => {
+		const folderInput = await browser.$(".ghvault-settings input[placeholder='docs/vault']");
+		await folderInput.setValue("../../etc/passwd");
+		await browser.pause(300);
+
+		// Find the description element next to sync folder setting
+		const errorColor = await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Sync folder") {
+					const desc = item.querySelector(".setting-item-description") as HTMLElement;
+					return desc?.style.color ?? "";
+				}
+			}
+			return "";
+		});
+		expect(errorColor).toContain("var(--text-error)");
+	});
+
+	it("debounce shows red error for out-of-range value", async () => {
+		const debounceInput = await browser.$(".ghvault-settings input[placeholder='10']");
+		await debounceInput.setValue("999");
+		await browser.pause(300);
+
+		const errorColor = await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Auto-sync debounce") {
+					const desc = item.querySelector(".setting-item-description") as HTMLElement;
+					return desc?.style.color ?? "";
+				}
+			}
+			return "";
+		});
+		expect(errorColor).toContain("var(--text-error)");
+	});
+
+	it("pull interval shows red error for out-of-range value", async () => {
+		// Find input by setting name, not placeholder (more reliable)
+		await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Remote pull interval") {
+					const input = item.querySelector("input") as HTMLInputElement;
+					if (input) {
+						// Simulate user typing an invalid value
+						const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+							HTMLInputElement.prototype,
+							"value",
+						)?.set;
+						nativeInputValueSetter?.call(input, "5");
+						input.dispatchEvent(new Event("input", { bubbles: true }));
+					}
+				}
+			}
+		});
+		await browser.pause(300);
+
+		const errorColor = await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Remote pull interval") {
+					const desc = item.querySelector(".setting-item-description") as HTMLElement;
+					return desc?.style.color ?? "";
+				}
+			}
+			return "";
+		});
+		expect(errorColor).toContain("var(--text-error)");
+	});
+
+	it("exclude patterns shows red error for invalid pattern", async () => {
+		const textarea = await browser.$(".ghvault-settings textarea");
+		await textarea.setValue("&&%$]");
+		await browser.pause(300);
+
+		const errorColor = await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Exclude patterns") {
+					const desc = item.querySelector(".setting-item-description") as HTMLElement;
+					return desc?.style.color ?? "";
+				}
+			}
+			return "";
+		});
+		expect(errorColor).toContain("var(--text-error)");
+	});
+
+	it("error clears when valid value entered and field blurred", async () => {
+		const debounceInput = await browser.$(".ghvault-settings input[placeholder='10']");
+		// First invalid
+		await debounceInput.setValue("999");
+		await browser.pause(300);
+
+		// Verify error is shown
+		const errorColor = await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Auto-sync debounce") {
+					const desc = item.querySelector(".setting-item-description") as HTMLElement;
+					return desc?.style.color ?? "";
+				}
+			}
+			return "";
+		});
+		expect(errorColor).toContain("var(--text-error)");
+
+		// Now blur the field — should reset to saved valid value and clear error
+		await browser.execute(() => {
+			const input = document.querySelector(".ghvault-settings input[placeholder='10']") as HTMLElement;
+			input?.blur();
+		});
+		await browser.pause(300);
+
+		const clearedColor = await browser.execute(() => {
+			const items = document.querySelectorAll(".ghvault-settings .setting-item");
+			for (const item of items) {
+				const name = item.querySelector(".setting-item-name");
+				if (name?.textContent === "Auto-sync debounce") {
+					const desc = item.querySelector(".setting-item-description") as HTMLElement;
+					return desc?.style.color ?? "";
+				}
+			}
+			return "";
+		});
+		expect(clearedColor).toBe("");
+	});
+
 	it("exclude patterns persists after reload", async () => {
 		// Set patterns
 		const textarea = await browser.$(".ghvault-settings textarea");
