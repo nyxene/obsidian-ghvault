@@ -1,4 +1,5 @@
 import type { Vault } from "obsidian";
+import type { SHACacheEntry } from "../types";
 import { hasBinaryContent } from "../utils/binary";
 import { pMap } from "../utils/concurrency";
 import { computeHash, computeHashFromBuffer } from "../utils/hash";
@@ -92,13 +93,26 @@ export class ObsidianVaultAdapter implements SyncVault {
 		}
 	}
 
-	async listFiles(): Promise<LocalFileInfo[]> {
+	async listFiles(cache?: Readonly<Record<string, SHACacheEntry>>): Promise<LocalFileInfo[]> {
 		const allFiles = this.vault.getFiles();
 		const files = allFiles.filter((f) => !isExcluded(f.path, this.excludePatterns));
 
 		return pMap(
 			files,
 			async (file) => {
+				// Skip hashing if file unchanged since last sync (mtime optimization)
+				if (cache) {
+					const cached = cache[file.path];
+					if (cached && file.stat.mtime <= cached.lastSyncedAt && file.stat.size === cached.size) {
+						return {
+							path: file.path,
+							contentHash: cached.localContentHash,
+							size: file.stat.size,
+							isBinary: cached.isBinary,
+						};
+					}
+				}
+
 				const ext = file.extension.toLowerCase();
 				if (TEXT_EXTENSIONS.has(ext)) {
 					const content = await this.vault.cachedRead(file);
