@@ -5,8 +5,26 @@ import { LOG_FILE, SECRET_PATTERN, VALID_LOG_LEVELS } from "../types";
 const MAX_LOG_LINES = 5000;
 const TRIM_TO_LINES = 3000;
 
+const MAX_DATA_STRING_LENGTH = 500;
+
 function sanitizeSecrets(text: string): string {
 	return text.replace(SECRET_PATTERN, "[REDACTED]");
+}
+
+function truncateDataStrings(data: unknown): unknown {
+	if (typeof data === "string") {
+		return data.length > MAX_DATA_STRING_LENGTH
+			? `${data.slice(0, MAX_DATA_STRING_LENGTH)}...`
+			: data;
+	}
+	if (data && typeof data === "object" && !Array.isArray(data)) {
+		const result: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(data)) {
+			result[key] = truncateDataStrings(value);
+		}
+		return result;
+	}
+	return data;
 }
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
@@ -85,7 +103,7 @@ export class Logger {
 		};
 
 		if (data !== undefined) {
-			entry.data = data;
+			entry.data = truncateDataStrings(data);
 		}
 
 		const line = sanitizeSecrets(JSON.stringify(entry));

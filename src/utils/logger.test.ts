@@ -274,4 +274,27 @@ describe("Logger", () => {
 			expect(lastAppendCall).toContain("queued-2");
 		});
 	});
+
+	describe("error string truncation", () => {
+		it("truncates long string values in data to 500 chars", () => {
+			const longError = "A".repeat(1000);
+			logger.error("API failed", { error: longError });
+
+			const append = app.vault.adapter.append as ReturnType<typeof vi.fn>;
+			const logged = append.mock.calls[0][1] as string;
+			const entry = JSON.parse(logged.trim()) as LogEntry;
+			const errorStr = (entry.data as { error: string }).error;
+			expect(errorStr.length).toBeLessThanOrEqual(503); // 500 + "..."
+			expect(errorStr).toContain("...");
+		});
+
+		it("does not truncate short strings in data", () => {
+			logger.error("small error", { error: "short message" });
+
+			const append = app.vault.adapter.append as ReturnType<typeof vi.fn>;
+			const logged = append.mock.calls[0][1] as string;
+			const entry = JSON.parse(logged.trim()) as LogEntry;
+			expect((entry.data as { error: string }).error).toBe("short message");
+		});
+	});
 });
