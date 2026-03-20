@@ -19,7 +19,9 @@ export interface SyncVault {
 	writeFileBinary(path: string, data: ArrayBuffer): Promise<void>;
 	deleteFile(path: string): Promise<void>;
 	renameFile(oldPath: string, newPath: string): Promise<void>;
-	listFiles(): Promise<LocalFileInfo[]>;
+	listFiles(
+		cache?: Readonly<Record<string, import("../types").SHACacheEntry>>,
+	): Promise<LocalFileInfo[]>;
 }
 
 export interface SyncResult {
@@ -90,8 +92,8 @@ export class SyncEngine {
 		await this.state.load();
 
 		// Compute local changes BEFORE pull to enable conflict detection
-		const localFiles = await this.vault.listFiles();
 		const cache = this.state.getAllSHAs();
+		const localFiles = await this.vault.listFiles(cache);
 		let localChanges = computeLocalChanges(localFiles, cache, this.excludePatterns);
 
 		// Get remote changes without applying them

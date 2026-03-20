@@ -414,4 +414,95 @@ describe("ObsidianVaultAdapter", () => {
 			expect(vault.createFolder).not.toHaveBeenCalled();
 		});
 	});
+
+	describe("listFiles with mtime optimization", () => {
+		it("skips hashing when file mtime and size match cache", async () => {
+			const vault = createMockVault([{ path: "note.md", content: "hello", size: 5 }]);
+			// Set mtime to past
+			const tfile = vault.getFileByPath("note.md") as TFile;
+			tfile.stat.mtime = 1000;
+
+			const adapter = new ObsidianVaultAdapter(vault);
+			const cache = {
+				"note.md": {
+					remoteSha: "sha",
+					localContentHash: "cached-hash",
+					lastSyncedAt: 2000,
+					size: 5,
+					isBinary: false,
+				},
+			};
+
+			const files = await adapter.listFiles(cache);
+
+			expect(files).toHaveLength(1);
+			expect(files[0].contentHash).toBe("cached-hash");
+			// Should NOT have read the file
+			expect(vault.cachedRead).not.toHaveBeenCalled();
+		});
+
+		it("hashes file when mtime is newer than cache", async () => {
+			const vault = createMockVault([{ path: "note.md", content: "hello", size: 5 }]);
+			const tfile = vault.getFileByPath("note.md") as TFile;
+			tfile.stat.mtime = 3000;
+
+			const adapter = new ObsidianVaultAdapter(vault);
+			const cache = {
+				"note.md": {
+					remoteSha: "sha",
+					localContentHash: "old-hash",
+					lastSyncedAt: 2000,
+					size: 5,
+					isBinary: false,
+				},
+			};
+
+			const files = await adapter.listFiles(cache);
+
+			expect(files).toHaveLength(1);
+			// Should have recomputed hash (not "old-hash")
+			expect(files[0].contentHash).toBe("hash-5");
+			expect(vault.cachedRead).toHaveBeenCalled();
+		});
+
+		it("hashes file when size differs from cache", async () => {
+			const vault = createMockVault([{ path: "note.md", content: "hello world", size: 11 }]);
+			const tfile = vault.getFileByPath("note.md") as TFile;
+			tfile.stat.mtime = 1000;
+
+			const adapter = new ObsidianVaultAdapter(vault);
+			const cache = {
+				"note.md": {
+					remoteSha: "sha",
+					localContentHash: "old-hash",
+					lastSyncedAt: 2000,
+					size: 5, // different from actual 11
+					isBinary: false,
+				},
+			};
+
+			const files = await adapter.listFiles(cache);
+
+			expect(files[0].contentHash).toBe("hash-11");
+		});
+
+		it("hashes file when not in cache", async () => {
+			const vault = createMockVault([{ path: "new.md", content: "new", size: 3 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles({});
+
+			expect(files[0].contentHash).toBe("hash-3");
+		});
+
+		it("hashes all files when no cache provided", async () => {
+			const vault = createMockVault([{ path: "a.md", content: "aaa", size: 3 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files[0].contentHash).toBe("hash-3");
+			expect(vault.cachedRead).toHaveBeenCalled();
+		});
+	});
 });
