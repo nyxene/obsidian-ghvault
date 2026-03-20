@@ -226,4 +226,77 @@ describe("FileHistoryModal", () => {
 		expect(error).not.toBeNull();
 		expect(error?.text).toContain("Network error");
 	});
+
+	it("Load more fetches next page and appends commits", async () => {
+		let callCount = 0;
+		const provider: FileHistoryProvider = {
+			listFileCommits: vi.fn().mockImplementation(async () => {
+				callCount++;
+				if (callCount === 1) {
+					return Array.from({ length: 20 }, (_, i) => ({
+						sha: `sha-${i}`,
+						message: `commit ${i}`,
+						authorName: "User",
+						date: new Date().toISOString(),
+						htmlUrl: `https://github.com/test/repo/commit/sha-${i}`,
+					}));
+				}
+				return [
+					{
+						sha: "sha-last",
+						message: "last commit",
+						authorName: "User",
+						date: new Date().toISOString(),
+						htmlUrl: "https://github.com/test/repo/commit/sha-last",
+					},
+				];
+			}),
+		};
+
+		const modal = new FileHistoryModal({} as never, "file.md", "main", provider);
+		await modal.onOpen();
+
+		// First page: 20 commits
+		let rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+		expect(rows).toHaveLength(20);
+
+		// Load more button should be visible
+		const footer = findByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-footer");
+		const loadBtn = footer?.children[0];
+		expect(loadBtn?.style.display).not.toBe("none");
+
+		// Simulate Load more click
+		for (const handler of loadBtn?.listeners.click ?? []) {
+			await (handler as () => Promise<void>)();
+		}
+
+		// Should now have 21 commits
+		rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+		expect(rows).toHaveLength(21);
+
+		// Button should be hidden (last page had < 20)
+		expect(loadBtn?.style.display).toBe("none");
+
+		// Provider called with page 1, then page 2
+		expect(provider.listFileCommits).toHaveBeenCalledWith("file.md", "main", 20, 1);
+		expect(provider.listFileCommits).toHaveBeenCalledWith("file.md", "main", 20, 2);
+	});
+
+	it("does not fetch when hasMore is false", async () => {
+		const provider = createMockProvider([]); // empty → hasMore = false
+		const modal = new FileHistoryModal({} as never, "file.md", "main", provider);
+		await modal.onOpen();
+
+		// Try to load more — should be no-op
+		const footer = findByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-footer");
+		const loadBtn = footer?.children[0];
+		if (loadBtn?.listeners.click) {
+			for (const handler of loadBtn.listeners.click) {
+				await (handler as () => Promise<void>)();
+			}
+		}
+
+		// Only 1 call (initial)
+		expect(provider.listFileCommits).toHaveBeenCalledTimes(1);
+	});
 });

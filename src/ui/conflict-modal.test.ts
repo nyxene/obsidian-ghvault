@@ -242,4 +242,50 @@ describe("ConflictModal", () => {
 		expect(localBtn.classes.has("ghvault-conflict-selected")).toBe(false);
 		expect(remoteBtn.classes.has("ghvault-conflict-selected")).toBe(true);
 	});
+
+	it("resolve with partial decisions includes only decided files", async () => {
+		const modal = new ConflictModal({} as never, twoConflicts);
+		modal.onOpen();
+
+		const promise = modal.waitForDecisions();
+
+		// Only decide first conflict, leave second undecided
+		const actionCells = findByCls(
+			modal.contentEl as unknown as MockElement,
+			"ghvault-conflict-actions",
+		);
+		click(actionCells[0].children[0]); // Keep Local for a.md
+
+		// Resolve button should still be disabled (not all decided)
+		const resolveBtn = findByCls(modal.contentEl as unknown as MockElement, "mod-cta")[0];
+		expect(resolveBtn.disabled).toBe(true);
+
+		// Close modal — should resolve with empty (skip)
+		modal.onClose();
+
+		const decisions = await promise;
+		expect(decisions).toEqual([]);
+	});
+
+	it("onClose after resolve does not double-resolve", async () => {
+		const modal = new ConflictModal({} as never, [twoConflicts[0]]);
+		modal.onOpen();
+
+		const promise = modal.waitForDecisions();
+
+		// Decide and resolve
+		const actionCells = findByCls(
+			modal.contentEl as unknown as MockElement,
+			"ghvault-conflict-actions",
+		);
+		click(actionCells[0].children[0]); // Keep Local
+		const resolveBtn = findByCls(modal.contentEl as unknown as MockElement, "mod-cta")[0];
+		click(resolveBtn);
+
+		const decisions = await promise;
+		expect(decisions).toHaveLength(1);
+
+		// Calling onClose again should be safe (no-op)
+		modal.onClose();
+	});
 });
