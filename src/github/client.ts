@@ -55,6 +55,9 @@ export class GitHubClient {
 		const data = await this.request<{ ref: string; object: { sha: string } }>(
 			`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
 		);
+		if (typeof data.ref !== "string" || typeof data.object?.sha !== "string") {
+			throw new Error("Invalid ref response from GitHub API");
+		}
 		return { ref: data.ref, sha: data.object.sha };
 	}
 
@@ -64,6 +67,9 @@ export class GitHubClient {
 		const data = await this.request<{ sha: string; tree: { sha: string } }>(
 			`/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`,
 		);
+		if (typeof data.sha !== "string" || typeof data.tree?.sha !== "string") {
+			throw new Error("Invalid commit response from GitHub API");
+		}
 		return { sha: data.sha, treeSha: data.tree.sha };
 	}
 
@@ -74,7 +80,10 @@ export class GitHubClient {
 		const data = await this.request<{ tree: GitHubTreeEntry[]; truncated: boolean }>(
 			`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(sha)}${query}`,
 		);
-		return { entries: data.tree, truncated: data.truncated };
+		if (!Array.isArray(data.tree)) {
+			throw new Error("Invalid tree response from GitHub API");
+		}
+		return { entries: data.tree, truncated: !!data.truncated };
 	}
 
 	async getFileContent(path: string, ref?: string): Promise<FileContentResponse> {
@@ -136,12 +145,15 @@ export class GitHubClient {
 				html_url: string;
 			}>
 		>(`/repos/${owner}/${repo}/commits${query}`);
+		if (!Array.isArray(data)) {
+			throw new Error("Invalid commits response from GitHub API");
+		}
 		return data.map((c) => ({
 			sha: c.sha,
-			message: c.commit.message,
-			authorName: c.commit.author.name,
-			date: c.commit.author.date,
-			htmlUrl: c.html_url,
+			message: c.commit?.message ?? "",
+			authorName: c.commit?.author?.name ?? "Unknown",
+			date: c.commit?.author?.date ?? "",
+			htmlUrl: c.html_url ?? "",
 		}));
 	}
 

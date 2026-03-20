@@ -65,6 +65,11 @@ describe("GitHubClient", () => {
 			const result = await createClient().getRef("main");
 			expect(result).toEqual({ ref: "refs/heads/main", sha: "abc123" });
 		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ html: "<html>login page</html>" });
+			await expect(createClient().getRef("main")).rejects.toThrow("Invalid ref response");
+		});
 	});
 
 	describe("getCommit", () => {
@@ -72,6 +77,11 @@ describe("GitHubClient", () => {
 			mockResponse({ sha: "abc123", tree: { sha: "tree456" } });
 			const result = await createClient().getCommit("abc123");
 			expect(result).toEqual({ sha: "abc123", treeSha: "tree456" });
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ error: "not found" });
+			await expect(createClient().getCommit("bad")).rejects.toThrow("Invalid commit response");
 		});
 	});
 
@@ -85,6 +95,11 @@ describe("GitHubClient", () => {
 			expect(result.entries).toHaveLength(1);
 			expect(result.entries[0].path).toBe("file.md");
 			expect(result.truncated).toBe(false);
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ html: "<html>proxy login</html>" });
+			await expect(createClient().getTree("bad")).rejects.toThrow("Invalid tree response");
 		});
 	});
 
@@ -428,6 +443,14 @@ describe("GitHubClient", () => {
 			const commits = await client.listFileCommits("new.md", "main");
 
 			expect(commits).toEqual([]);
+		});
+
+		it("throws on invalid response shape", async () => {
+			const client = createClient();
+			mockResponse({ error: "not a list" });
+			await expect(client.listFileCommits("file.md", "main")).rejects.toThrow(
+				"Invalid commits response",
+			);
 		});
 	});
 
