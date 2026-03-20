@@ -322,6 +322,12 @@ describe("sanitizeErrorForUI (exported)", () => {
 		expect(sanitizeErrorForUI(msg)).toBe("Token [REDACTED] leaked");
 	});
 
+	it("redacts GitHub Actions tokens (gha_)", async () => {
+		const { sanitizeErrorForUI } = await import("./main");
+		const msg = "Auth failed with gha_abcdefghij1234567890 token";
+		expect(sanitizeErrorForUI(msg)).toBe("Auth failed with [REDACTED] token");
+	});
+
 	it("does not redact short ghp_ strings below 20 chars", async () => {
 		const { sanitizeErrorForUI } = await import("./main");
 		const msg = "ghp_short";

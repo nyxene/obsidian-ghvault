@@ -179,7 +179,7 @@ export const LOG_FILE = "ghvault.log";
 
 /** Shared regex for redacting secrets in logs and UI messages. */
 export const SECRET_PATTERN =
-	/gh[pousxr]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+	/gh[pousxra]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|Bearer [a-zA-Z0-9_.-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 export const DEFAULT_SETTINGS: GHVaultSettings = {
 	githubToken: "",
