@@ -193,9 +193,26 @@ export class GHVaultSettingTab extends PluginSettingTab {
 		warning.style.fontSize = "12px";
 		warning.style.lineHeight = "1.4";
 		warning.setText(
-			"Token is stored unencrypted in your vault's plugin data. " +
-				"Do not share your vault folder. Use a fine-grained PAT with minimal permissions.",
+			"Token is stored unencrypted in your vault's plugin data (data.json). " +
+				"Do not sync your vault folder via cloud storage (Dropbox, iCloud, Google Drive) " +
+				"if security is a concern. Use a fine-grained PAT with contents:write scope only on the target repo.",
 		);
+
+		if (this.settings.githubToken) {
+			new Setting(containerEl)
+				.setName("Forget token")
+				.setDesc("Clear the stored token from plugin data")
+				.addButton((button) => {
+					button
+						.setButtonText("Forget")
+						.setWarning()
+						.onClick(async () => {
+							this.settings.githubToken = "";
+							await this.callbacks.onSave(this.settings);
+							this.display();
+						});
+				});
+		}
 
 		new Setting(containerEl)
 			.setName("Repository owner")

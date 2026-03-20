@@ -221,6 +221,9 @@ export class ButtonComponent {
 	isDisabled(): boolean {
 		return this._disabled;
 	}
+	setWarning(): this {
+		return this;
+	}
 	onClick(cb: () => void | Promise<void>): this {
 		this._onClick = cb;
 		return this;
