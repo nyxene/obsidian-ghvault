@@ -101,6 +101,18 @@ The status bar shows the current state:
 
 ![GHVault: idle](docs/screenshots/vault-idle.png) ![GHVault: syncing...](docs/screenshots/vault-syncing.png)
 
+### Conflict resolution modal
+
+When using the "Ask" strategy, a modal appears listing each conflicted file with per-file choices:
+
+![Conflict resolution modal](docs/screenshots/conflict-modal.png)
+
+### File history
+
+View commit history for any file via the "Show file history" command:
+
+![File history modal](docs/screenshots/file-history.png)
+
 ## How it works
 
 ```
@@ -230,6 +242,10 @@ src/
     logger.ts              # Structured JSON logger
     path.ts                # Path mapping and validation
 ```
+
+## Built with AI assistance
+
+This project was developed with the assistance of [Claude Code](https://claude.ai/claude-code) (Anthropic). All architecture decisions, code review, and quality control were performed by the project maintainer. AI was used as a development tool for implementation, testing, and documentation. See our [AI Policy](AI_POLICY.md) for contribution guidelines.
 
 ## License
 

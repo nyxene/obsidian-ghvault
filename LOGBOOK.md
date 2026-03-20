@@ -1,4 +1,6 @@
-# LOGBOOK
+# LOGBOOK — Development Workflow
+
+> **What is this?** This is GHVault's development workflow protocol — the complete lifecycle from issue to merge. If you're contributing, start with [CONTRIBUTING.md](CONTRIBUTING.md) for a quick overview, then refer here for the full process.
 
 > *The Nautilus keeps a logbook. Every course change is recorded, every depth noted.*
 > *In our case — the protocol through which code enters the repository.*
