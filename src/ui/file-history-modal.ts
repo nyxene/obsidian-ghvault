@@ -134,7 +134,9 @@ export class FileHistoryModal extends Modal {
 		});
 
 		row.addEventListener("click", () => {
-			window.open(commit.htmlUrl, "_blank");
+			if (commit.htmlUrl.startsWith("https://github.com/")) {
+				window.open(commit.htmlUrl, "_blank");
+			}
 		});
 	}
 }
