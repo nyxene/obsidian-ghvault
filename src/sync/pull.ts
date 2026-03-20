@@ -57,35 +57,18 @@ export class PullEngine {
 	}
 
 	private lastMappedTree: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+	private lastRawTree: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+	private lastRefSha = "";
 
 	getLastMappedTree(): Readonly<Awaited<ReturnType<GitHubClient["getTree"]>>["entries"]> {
 		return this.lastMappedTree;
 	}
 
 	async getRemoteChanges(branch: string): Promise<FileChange[]> {
-		let ref: GitHubRef;
-		try {
-			ref = await this.client.getRef(branch);
-		} catch (error: unknown) {
-			if (error instanceof GitHubEmptyRepoError) {
-				return [];
-			}
-			throw error;
-		}
-		const commit = await this.client.getCommit(ref.sha);
+		const { refSha, treeEntries } = await this.fetchRefAndTree(branch);
+		this.lastRefSha = refSha;
+		this.lastRawTree = treeEntries;
 
-		let treeEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
-		try {
-			const tree = await this.client.getTree(commit.treeSha, true);
-			treeEntries = tree.entries;
-			if (tree.truncated) {
-				this.logger.warn("Tree response truncated — some files may be missed");
-			}
-		} catch (error: unknown) {
-			if (!(error instanceof GitHubNotFoundError)) throw error;
-		}
-
-		// Map repo paths to vault paths, filtering out files outside syncFolder
 		const mappedEntries = this.mapTreeToVaultPaths(treeEntries);
 		this.lastMappedTree = mappedEntries;
 
@@ -93,32 +76,16 @@ export class PullEngine {
 		return computeRemoteChanges(mappedEntries, cache, this.excludePatterns);
 	}
 
-	async pull(
-		branch: string,
-		skipPaths?: ReadonlySet<string>,
-		remoteRenames?: readonly RenameInfo[],
-	): Promise<PullResult> {
-		const result: PullResult = { created: [], modified: [], deleted: [], renamed: [], errors: [] };
-
-		this.logger.info("Pull started", { branch });
-
+	private async fetchRefAndTree(branch: string): Promise<{
+		refSha: string;
+		treeEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"];
+	}> {
 		let ref: GitHubRef;
 		try {
 			ref = await this.client.getRef(branch);
 		} catch (error: unknown) {
 			if (error instanceof GitHubEmptyRepoError) {
-				this.logger.info("Repository is empty — initializing");
-				const initPath = toRepoPath(".ghvault", this.syncFolder);
-				const init = await this.client.createFile(
-					initPath,
-					"initialized",
-					"chore: initialize repository",
-					branch,
-				);
-				this.state.setHeadOid(init.commitSha);
-				this.state.setLastSyncedAt(Date.now());
-				await this.state.save();
-				return result;
+				return { refSha: "", treeEntries: [] };
 			}
 			throw error;
 		}
@@ -137,6 +104,48 @@ export class PullEngine {
 			} else {
 				throw error;
 			}
+		}
+
+		return { refSha: ref.sha, treeEntries };
+	}
+
+	async pull(
+		branch: string,
+		skipPaths?: ReadonlySet<string>,
+		remoteRenames?: readonly RenameInfo[],
+	): Promise<PullResult> {
+		const result: PullResult = { created: [], modified: [], deleted: [], renamed: [], errors: [] };
+
+		this.logger.info("Pull started", { branch });
+
+		// Reuse ref+tree from getRemoteChanges if available, otherwise fetch fresh
+		let refSha: string;
+		let treeEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"];
+
+		if (this.lastRefSha) {
+			refSha = this.lastRefSha;
+			treeEntries = this.lastRawTree;
+			this.lastRefSha = "";
+			this.lastRawTree = [];
+		} else {
+			const fetched = await this.fetchRefAndTree(branch);
+			refSha = fetched.refSha;
+			treeEntries = fetched.treeEntries;
+		}
+
+		if (!refSha) {
+			this.logger.info("Repository is empty — initializing");
+			const initPath = toRepoPath(".ghvault", this.syncFolder);
+			const init = await this.client.createFile(
+				initPath,
+				"initialized",
+				"chore: initialize repository",
+				branch,
+			);
+			this.state.setHeadOid(init.commitSha);
+			this.state.setLastSyncedAt(Date.now());
+			await this.state.save();
+			return result;
 		}
 
 		// Map repo paths to vault paths, filtering out files outside syncFolder.
@@ -160,7 +169,7 @@ export class PullEngine {
 
 		if (changes.length === 0) {
 			this.logger.info("Pull complete — no remote changes");
-			this.state.setHeadOid(ref.sha);
+			this.state.setHeadOid(refSha);
 			this.state.setLastSyncedAt(Date.now());
 			await this.state.save();
 			return result;
@@ -243,7 +252,7 @@ export class PullEngine {
 			!this.syncFolder && downloads.length > ZIP_MIN_FILES && totalDownloadSize <= ZIP_MAX_SIZE;
 
 		if (useZip) {
-			await this.pullViaZip(branch, ref.sha, downloads, treeShaMap, result);
+			await this.pullViaZip(branch, refSha, downloads, treeShaMap, result);
 		} else {
 			await this.pullPerFile(branch, downloads, repoPathMap, result);
 		}
@@ -261,7 +270,7 @@ export class PullEngine {
 			}
 		}
 
-		this.state.setHeadOid(ref.sha);
+		this.state.setHeadOid(refSha);
 		this.state.setLastSyncedAt(Date.now());
 		await this.state.save();
 
