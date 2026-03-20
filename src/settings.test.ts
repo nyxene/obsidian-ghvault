@@ -282,12 +282,34 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Log level");
 		});
 
-		it("creates a token warning element", () => {
+		it("creates a token warning element with security guidance", () => {
 			const { tab } = createTab();
 			tab.display();
 			const warning = tab.containerEl.querySelector(".ghvault-token-warning");
 			expect(warning).not.toBeNull();
 			expect(warning?.textContent).toContain("Token is stored unencrypted");
+			expect(warning?.textContent).toContain("cloud storage");
+			expect(warning?.textContent).toContain("fine-grained PAT");
+		});
+
+		it("shows forget token button when token is set", () => {
+			const { tab } = createTab({ githubToken: "ghp_test1234567890123456" });
+			tab.display();
+			const settings = getSettings();
+			const forgetSetting = settings.find(
+				(s: { getName: () => string }) => s.getName() === "Forget token",
+			);
+			expect(forgetSetting).toBeDefined();
+		});
+
+		it("hides forget token button when token is empty", () => {
+			const { tab } = createTab({ githubToken: "" });
+			tab.display();
+			const settings = getSettings();
+			const forgetSetting = settings.find(
+				(s: { getName: () => string }) => s.getName() === "Forget token",
+			);
+			expect(forgetSetting).toBeUndefined();
 		});
 
 		it("sets initial values from settings", () => {
