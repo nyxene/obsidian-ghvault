@@ -3,9 +3,14 @@ import type { GitHubClient } from "../github/client";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { computeGitBlobSha, computeHashFromBuffer } from "../utils/hash";
 import type { Logger } from "../utils/logger";
+import { processZipEntries } from "../utils/zip";
 import type { VaultAdapter } from "./pull";
 import { PullEngine } from "./pull";
 import type { SyncStateManager } from "./state";
+
+vi.mock("../utils/zip", () => ({
+	processZipEntries: vi.fn().mockResolvedValue(0),
+}));
 
 vi.mock("../utils/hash", () => ({
 	computeGitBlobSha: vi.fn(),
@@ -44,6 +49,7 @@ function createMockClient(
 				size: entry?.size ?? 100,
 			});
 		}),
+		downloadZipball: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
 	} as unknown as GitHubClient;
 }
 
@@ -804,6 +810,235 @@ describe("PullEngine", () => {
 			);
 			// Should not update cache for outside.md (outside syncFolder)
 			expect(state.setSHA).not.toHaveBeenCalledWith("outside.md", expect.anything());
+		});
+	});
+
+	describe("ZIP pull strategy", () => {
+		function createManyFiles(count: number): Array<{ path: string; sha: string; size: number }> {
+			return Array.from({ length: count }, (_, i) => ({
+				path: `file-${i}.md`,
+				sha: `sha-${i}`,
+				size: 100,
+			}));
+		}
+
+		it("uses ZIP when syncFolder is empty and >5 files to download", async () => {
+			const files = createManyFiles(8);
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			// Mock processZipEntries to simulate extracting files
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				for (const f of files) {
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(f.sha);
+					await onEntry(f.path, new TextEncoder().encode(`content of ${f.path}`));
+				}
+				return files.length;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			expect(client.downloadZipball).toHaveBeenCalledWith("head-sha");
+			expect(client.getFileContent).not.toHaveBeenCalled();
+			expect(result.created).toHaveLength(8);
+		});
+
+		it("uses per-file when syncFolder is set", async () => {
+			const files = createManyFiles(8).map((f) => ({ ...f, path: `docs/${f.path}` }));
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "docs",
+			});
+
+			const result = await engine.pull("main");
+
+			expect(client.downloadZipball).not.toHaveBeenCalled();
+			expect(client.getFileContent).toHaveBeenCalled();
+			expect(result.created).toHaveLength(8);
+		});
+
+		it("uses per-file when 5 or fewer files to download", async () => {
+			const files = createManyFiles(3);
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			expect(client.downloadZipball).not.toHaveBeenCalled();
+			expect(result.created).toHaveLength(3);
+		});
+
+		it("falls back to per-file when ZIP download fails", async () => {
+			const files = createManyFiles(8);
+			const client = createMockClient(files);
+			(client.downloadZipball as ReturnType<typeof vi.fn>).mockRejectedValue(
+				new Error("Network error"),
+			);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			// Should have fallen back to per-file
+			expect(client.downloadZipball).toHaveBeenCalled();
+			expect(client.getFileContent).toHaveBeenCalled();
+			expect(result.created).toHaveLength(8);
+		});
+
+		it("falls back to per-file for files not found in ZIP", async () => {
+			const files = createManyFiles(8);
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			// ZIP only contains 5 of 8 files
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				for (let i = 0; i < 5; i++) {
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(files[i].sha);
+					await onEntry(files[i].path, new TextEncoder().encode("content"));
+				}
+				return 5;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			// 5 from ZIP + 3 from per-file fallback
+			expect(client.getFileContent).toHaveBeenCalledTimes(3);
+			expect(result.created).toHaveLength(8);
+		});
+
+		it("rejects ZIP entries that fail SHA integrity check", async () => {
+			const files = createManyFiles(8);
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				// First file has wrong SHA
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("wrong-sha");
+				await onEntry(files[0].path, new TextEncoder().encode("tampered"));
+				// Rest are OK
+				for (let i = 1; i < files.length; i++) {
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(files[i].sha);
+					await onEntry(files[i].path, new TextEncoder().encode("content"));
+				}
+				return files.length;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			expect(result.errors).toHaveLength(1);
+			expect(result.errors[0].path).toBe("file-0.md");
+			expect(result.errors[0].error).toContain("SHA integrity");
+			// file-0.md stays in downloadPaths (SHA failed) → fallback picks it up via per-file
+			expect(client.getFileContent).toHaveBeenCalled();
+			expect(result.created).toHaveLength(8);
+		});
+
+		it("falls back when processZipEntries throws", async () => {
+			const files = createManyFiles(8);
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			vi.mocked(processZipEntries).mockRejectedValue(new Error("corrupt ZIP"));
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			// All 8 should fall back to per-file
+			expect(client.getFileContent).toHaveBeenCalledTimes(8);
+			expect(result.created).toHaveLength(8);
+		});
+
+		it("skips excluded paths in ZIP entries", async () => {
+			const files = [
+				...createManyFiles(6),
+				{ path: ".obsidian/config.json", sha: "sha-obs", size: 50 },
+				{ path: "ghvault.log", sha: "sha-log", size: 30 },
+			];
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				for (const f of files) {
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(f.sha);
+					await onEntry(f.path, new TextEncoder().encode("content"));
+				}
+				return files.length;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			// Only the 6 non-excluded files should be created
+			expect(result.created).toHaveLength(6);
+			expect(result.created).not.toContain(".obsidian/config.json");
+			expect(result.created).not.toContain("ghvault.log");
 		});
 	});
 });
