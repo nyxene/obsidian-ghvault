@@ -102,6 +102,15 @@ function createMockVault(files: MockFileEntry[] = []): Vault {
 			fileMap.delete(file.path);
 			tfiles.delete(file.path);
 		}),
+		rename: vi.fn(async (file: TFile, newPath: string) => {
+			const entry = fileMap.get(file.path);
+			if (entry) {
+				fileMap.delete(file.path);
+				tfiles.delete(file.path);
+				fileMap.set(newPath, { ...entry, path: newPath });
+				tfiles.set(newPath, createMockFile(newPath, entry.size));
+			}
+		}),
 		getFiles: vi.fn(() => Array.from(tfiles.values())),
 	} as unknown as Vault;
 }
@@ -192,6 +201,26 @@ describe("ObsidianVaultAdapter", () => {
 			await adapter.deleteFile("nonexistent.md");
 
 			expect(vault.trash).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("renameFile", () => {
+		it("renames existing file", async () => {
+			const vault = createMockVault([{ path: "old.md", content: "content", size: 7 }]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await adapter.renameFile("old.md", "new.md");
+
+			expect(vault.rename).toHaveBeenCalled();
+		});
+
+		it("throws when source file does not exist", async () => {
+			const vault = createMockVault([]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			await expect(adapter.renameFile("missing.md", "new.md")).rejects.toThrow(
+				"File not found: missing.md",
+			);
 		});
 	});
 
