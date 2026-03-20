@@ -26,7 +26,7 @@ import {
 import { ConflictModal } from "./ui/conflict-modal";
 import { FileHistoryModal } from "./ui/file-history-modal";
 import { Logger } from "./utils/logger";
-import { getEffectiveExcludePatterns, toRepoPath } from "./utils/path";
+import { getEffectiveExcludePatterns, isSafePath, toRepoPath } from "./utils/path";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
 const VALID_CHANGE_TYPES = new Set<string>(["create", "modify", "delete"]);
@@ -435,6 +435,7 @@ export default class GHVaultPlugin extends Plugin {
 		let restored = 0;
 		for (const [path, type] of Object.entries(entries)) {
 			if (typeof path !== "string" || !path) continue;
+			if (!isSafePath(path)) continue;
 			if (typeof type !== "string" || !VALID_CHANGE_TYPES.has(type)) continue;
 			this.changeQueue.push(path, type as ChangeType);
 			restored++;

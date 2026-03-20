@@ -1156,6 +1156,30 @@ describe("GHVaultPlugin", () => {
 			expect(mockChangeQueuePush).toHaveBeenCalledWith("valid.md", "modify");
 		});
 
+		it("skips entries with unsafe paths", async () => {
+			await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+				pendingChanges: {
+					"safe.md": "create",
+					"../../etc/passwd": "create",
+					"/absolute/path.md": "modify",
+					"normal/note.md": "modify",
+				},
+			});
+
+			expect(mockChangeQueuePush).toHaveBeenCalledTimes(2);
+			expect(mockChangeQueuePush).toHaveBeenCalledWith("safe.md", "create");
+			expect(mockChangeQueuePush).toHaveBeenCalledWith("normal/note.md", "modify");
+			expect(mockChangeQueuePush).not.toHaveBeenCalledWith("../../etc/passwd", expect.anything());
+		});
+
 		it("skips restore when pendingChanges is not an object", async () => {
 			await loadPlugin({
 				settings: {
