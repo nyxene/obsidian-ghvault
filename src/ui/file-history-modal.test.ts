@@ -227,6 +227,50 @@ describe("FileHistoryModal", () => {
 		expect(error?.text).toContain("Network error");
 	});
 
+	it("does not open non-github URLs on row click", async () => {
+		const mockOpen = vi.fn();
+		globalThis.window = { open: mockOpen } as unknown as Window & typeof globalThis;
+
+		const maliciousCommit: FileCommitInfo[] = [
+			{
+				sha: "abc",
+				message: "commit",
+				authorName: "User",
+				date: new Date().toISOString(),
+				htmlUrl: "https://evil.com/phishing",
+			},
+		];
+		const modal = new FileHistoryModal(
+			{} as never,
+			"f.md",
+			"main",
+			createMockProvider(maliciousCommit),
+		);
+		await modal.onOpen();
+
+		const row = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row")[0];
+		for (const handler of row.listeners.click ?? []) {
+			handler();
+		}
+
+		expect(mockOpen).not.toHaveBeenCalled();
+	});
+
+	it("opens valid github URLs on row click", async () => {
+		const mockOpen = vi.fn();
+		globalThis.window = { open: mockOpen } as unknown as Window & typeof globalThis;
+
+		const modal = new FileHistoryModal({} as never, "f.md", "main", createMockProvider());
+		await modal.onOpen();
+
+		const row = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row")[0];
+		for (const handler of row.listeners.click ?? []) {
+			handler();
+		}
+
+		expect(mockOpen).toHaveBeenCalledWith("https://github.com/test/repo/commit/abc123", "_blank");
+	});
+
 	it("Load more fetches next page and appends commits", async () => {
 		let callCount = 0;
 		const provider: FileHistoryProvider = {
