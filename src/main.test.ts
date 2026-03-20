@@ -1218,6 +1218,28 @@ describe("GHVaultPlugin", () => {
 			const savedData = vi.mocked(plugin.saveData).mock.calls[0][0];
 			expect(savedData.pendingChanges).toEqual({ "test.md": "modify" });
 		});
+
+		it("does not crash when persistPendingChanges fails", async () => {
+			const { plugin } = await loadPlugin({
+				settings: {
+					githubToken: "ghp_token1234567890123456",
+					owner: "me",
+					repo: "vault",
+					branch: "main",
+					autoSync: true,
+					autoSyncDebounce: 10,
+				},
+			});
+
+			// Make loadData reject
+			vi.mocked(plugin.loadData).mockRejectedValueOnce(new Error("disk full"));
+
+			// Should not throw
+			capturedChangeQueueOnPersist?.({ "test.md": "create" });
+			await vi.waitFor(() => {
+				expect(plugin.loadData).toHaveBeenCalled();
+			});
+		});
 	});
 
 	describe("periodic pull check", () => {
@@ -1291,6 +1313,18 @@ describe("GHVaultPlugin", () => {
 			mockIsSyncing = true;
 
 			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			await plugin.pullCheckTick();
+
+			expect(mockGetRef).not.toHaveBeenCalled();
+		});
+
+		it("skips pull check when rate limit is low", async () => {
+			const { plugin } = await loadPlugin(PULL_CHECK_SETTINGS);
+			// Override canMakeRequest to return false
+			(
+				plugin.rateLimiter as { canMakeRequest: ReturnType<typeof vi.fn> }
+			).canMakeRequest.mockReturnValue(false);
+
 			await plugin.pullCheckTick();
 
 			expect(mockGetRef).not.toHaveBeenCalled();
