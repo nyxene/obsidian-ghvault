@@ -1041,4 +1041,76 @@ describe("PullEngine", () => {
 			expect(result.created).not.toContain("ghvault.log");
 		});
 	});
+
+	describe("remote rename handling", () => {
+		it("renames file via vault.renameFile and updates cache", async () => {
+			const client = createMockClient([{ path: "new-name.md", sha: "sha-new" }]);
+			const state = createMockState({
+				"old-name.md": { remoteSha: "sha-old" },
+			});
+			(state as unknown as Record<string, unknown>).getSHA = vi.fn().mockReturnValue({
+				remoteSha: "sha-old",
+				localContentHash: "hash",
+				lastSyncedAt: 1000,
+				size: 10,
+				isBinary: false,
+			});
+			const vault = createMockVault();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const result = await engine.pull("main", undefined, [
+				{ oldPath: "old-name.md", newPath: "new-name.md" },
+			]);
+
+			expect(vault.renameFile).toHaveBeenCalledWith("old-name.md", "new-name.md");
+			expect(result.renamed).toHaveLength(1);
+			expect(state.deleteSHA).toHaveBeenCalledWith("old-name.md");
+			expect(state.setSHA).toHaveBeenCalledWith("new-name.md", expect.anything());
+		});
+
+		it("catches error when renameFile throws and adds to errors", async () => {
+			const client = createMockClient([{ path: "new.md", sha: "sha-new" }]);
+			const state = createMockState({
+				"old.md": { remoteSha: "sha-old" },
+			});
+			(state as unknown as Record<string, unknown>).getSHA = vi.fn().mockReturnValue({
+				remoteSha: "sha-old",
+				localContentHash: "hash",
+				lastSyncedAt: 1000,
+				size: 10,
+				isBinary: false,
+			});
+			const vault = createMockVault();
+			(vault.renameFile as ReturnType<typeof vi.fn>).mockRejectedValue(
+				new Error("File not found: old.md"),
+			);
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const result = await engine.pull("main", undefined, [
+				{ oldPath: "old.md", newPath: "new.md" },
+			]);
+
+			expect(result.renamed).toHaveLength(0);
+			// Rename error reported
+			const renameError = result.errors.find((e) => e.path === "old.md");
+			expect(renameError).toBeDefined();
+			expect(renameError?.error).toContain("File not found");
+			// setSHA should NOT be called for the rename target
+			expect(state.setSHA).not.toHaveBeenCalledWith("new.md", expect.anything());
+		});
+	});
 });
