@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import type { GitHubGraphQL } from "../github/graphql";
 import type { ConflictDecision, ConflictInfo, ConflictStrategy, SHACacheEntry } from "../types";
-import { computeGitBlobSha, computeHash, computeHashFromBuffer } from "../utils/hash";
+import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { ChangeQueue } from "./change-queue";
 import type { LocalFileInfo } from "./comparator";
@@ -14,8 +14,13 @@ import type { StorageAdapter } from "./state";
 import { SyncStateManager } from "./state";
 
 vi.mock("../utils/hash", () => ({
-	computeHash: vi.fn().mockResolvedValue("mock-hash"),
-	computeHashFromBuffer: vi.fn().mockResolvedValue("mock-hash"),
+	computeHash: vi.fn().mockImplementation((content: string) => {
+		return Promise.resolve(`hash-${content.length}`);
+	}),
+	computeHashFromBuffer: vi.fn().mockImplementation((data: ArrayBuffer | Uint8Array) => {
+		const len = data instanceof Uint8Array ? data.length : data.byteLength;
+		return Promise.resolve(`hash-${len}`);
+	}),
 	computeGitBlobSha: vi.fn().mockResolvedValue("mock-blob-sha"),
 }));
 
@@ -67,8 +72,8 @@ function createMockVaultAdapter(initialFiles: MockVaultFile[] = []): SyncVault &
 		listFiles: vi.fn(async (): Promise<LocalFileInfo[]> => {
 			const result: LocalFileInfo[] = [];
 			for (const [path, content] of files) {
-				const contentHash = `hash-${path}-${content.length}`;
-				vi.mocked(computeHash).mockResolvedValueOnce(contentHash);
+				// Deterministic hash matching computeHash mock: hash-{content.length}
+				const contentHash = `hash-${content.length}`;
 				result.push({
 					path,
 					contentHash,
@@ -111,7 +116,6 @@ function createMockGitHubClient(
 			const file = remoteFiles.find((f) => f.path === path);
 			if (!file) return Promise.reject(new Error(`Not found: ${path}`));
 			vi.mocked(computeGitBlobSha).mockResolvedValueOnce(file.sha);
-			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce(`hash-${file.path}`);
 			return Promise.resolve({
 				content: btoa(file.content),
 				sha: file.sha,
@@ -250,7 +254,7 @@ describe("Sync integration", () => {
 					cache: {
 						"doc.md": {
 							remoteSha: "sha-v1",
-							localContentHash: "hash-doc.md-11",
+							localContentHash: "hash-11",
 							lastSyncedAt: 1000,
 							size: 11,
 							isBinary: false,
@@ -279,7 +283,7 @@ describe("Sync integration", () => {
 					cache: {
 						"deleted.md": {
 							remoteSha: "sha-old",
-							localContentHash: "hash-deleted.md-15",
+							localContentHash: "hash-15",
 							lastSyncedAt: 1000,
 							size: 15,
 							isBinary: false,
@@ -386,7 +390,7 @@ describe("Sync integration", () => {
 					cache: {
 						"existing.md": {
 							remoteSha: "sha-old",
-							localContentHash: "hash-existing.md-12",
+							localContentHash: "hash-12",
 							lastSyncedAt: 1000,
 							size: 12,
 							isBinary: false,
@@ -616,10 +620,6 @@ describe("Sync integration", () => {
 			// Empty state = first sync
 			storage.data = {};
 
-			// getRemoteFileHash calls computeHashFromBuffer — return same hash as vault listFiles
-			const localHash = `hash-shared.md-${content.length}`;
-			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce(localHash);
-
 			const result = await engine.sync();
 
 			// Should NOT be a conflict
@@ -643,9 +643,8 @@ describe("Sync integration", () => {
 			// Empty state = first sync
 			storage.data = {};
 
-			// getRemoteFileHash returns different hash than vault's listFiles
-			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("different-remote-hash");
-
+			// local "local version" (13 chars) → hash-13
+			// remote "remote version" (14 chars) → hash-14 → different → conflict
 			const result = await engine.sync();
 
 			expect(result.conflicts).toHaveLength(1);
@@ -674,13 +673,8 @@ describe("Sync integration", () => {
 
 			storage.data = {};
 
-			// Reset computeHashFromBuffer mock queue from prior tests, then set up for first sync
-			vi.mocked(computeHashFromBuffer).mockReset().mockResolvedValue("mock-hash");
-			// reconcileFirstSync calls getRemoteFileHash for overlapping files (shared.md, diff.md)
-			const sharedLocalHash = `hash-shared.md-${sharedContent.length}`;
-			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce(sharedLocalHash); // shared.md → matches
-			vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("different-remote-hash"); // diff.md → differs
-
+			// shared.md: same content → hash-23 on both sides → identical
+			// diff.md: "local diff" (10) → hash-10, "remote diff" (11) → hash-11 → conflict
 			const result = await engine.sync();
 
 			// shared.md: identical → no conflict, cached
@@ -811,7 +805,6 @@ describe("Sync integration", () => {
 			const pulledHash = cached?.localContentHash ?? "";
 
 			vi.mocked(vault.listFiles).mockImplementation(async () => {
-				vi.mocked(computeHash).mockResolvedValueOnce(pulledHash);
 				return [{ path: "stable.md", contentHash: pulledHash, size: 14 }];
 			});
 
@@ -965,7 +958,6 @@ describe("Sync integration", () => {
 			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
 				if (path === "fail.md") return Promise.reject(new Error("connection reset"));
 				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-ok");
-				vi.mocked(computeHashFromBuffer).mockResolvedValueOnce("hash-ok");
 				return Promise.resolve({ content: btoa("ok content"), sha: "sha-ok", size: 10 });
 			});
 
