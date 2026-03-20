@@ -98,4 +98,23 @@ describe("processZipEntries", () => {
 			"end-c.md",
 		]);
 	});
+
+	it("throws when decompressed size exceeds limit", async () => {
+		// Create a ZIP with content larger than a tiny limit
+		const zip = createZip({
+			"root/a.md": "hello world",
+			"root/b.md": "more content here",
+		});
+
+		// Pass a 10-byte limit — decompressed content exceeds it
+		await expect(processZipEntries(zip, async () => {}, 10)).rejects.toThrow("exceeds limit");
+	});
+
+	it("does not throw when decompressed size is within limit", async () => {
+		const zip = createZip({ "root/small.md": "tiny" });
+
+		// 1MB limit — should be fine for 4 bytes
+		const count = await processZipEntries(zip, async () => {}, 1024 * 1024);
+		expect(count).toBe(1);
+	});
 });
