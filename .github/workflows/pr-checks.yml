@@ -1,10 +1,25 @@
-name: CI
+name: PR Checks
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
+  branch-name:
+    name: Branch Name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch naming convention
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          PATTERN="^(feat|fix|test|docs|perf|refactor|chore)/.*$|^release-please--.*$"
+          if [[ ! "$BRANCH" =~ $PATTERN ]]; then
+            echo "::error::Branch '$BRANCH' does not follow naming convention."
+            echo "Allowed prefixes: feat/, fix/, test/, docs/, perf/, refactor/, chore/"
+            exit 1
+          fi
+          echo "Branch name '$BRANCH' is valid."
+
   lint:
     name: Lint & Format
     runs-on: ubuntu-latest
