@@ -45,7 +45,7 @@ jobs:
       - run: npm run type-check
 
   test:
-    name: Tests
+    name: Tests & Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run test
+      - run: npm run test:coverage
 
   build:
     name: Build
