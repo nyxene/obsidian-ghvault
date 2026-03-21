@@ -1,13 +1,27 @@
 ---
 description: Run comprehensive QA analysis (coverage, test quality, performance, user scenarios, e2e)
-argument-hint: "[module: sync | github | utils | ui | settings | main | types]"
+argument-hint: "[module: sync | github | utils | ui | settings | main | types] or [--changed]"
 ---
 
 Launch a dedicated QA agent to perform comprehensive testing analysis.
 
-**Scope:** $ARGUMENTS (empty = full `src/`). Resolve module names to directories: `sync` → `src/sync/**`, `github` → `src/github/**`, `utils` → `src/utils/**`, `ui` → `src/ui/**`, `settings` → `src/settings.ts`, `main` → `src/main.ts`, `types` → `src/types.ts`.
+## Mode selection
 
-The agent MUST perform all 6 analysis directions below, in order. The agent is a READ-ONLY auditor for source code — it NEVER modifies `src/**/*.ts` files. It CAN create or update `*.bench.ts` benchmark files and CAN run test commands.
+**If `$ARGUMENTS` is `--changed`:**
+- Run `git diff main --name-only -- src/` to determine changed files
+- Scope analysis to ONLY those files and their corresponding test files
+- **DO NOT create GitHub issues** — output all findings inline in the report
+- Skip Direction 4 (User Scenarios) and Direction 5 (E2E) — focus on changed code only
+- Replace Direction 6 with: **"Suggested Issues"** — list what WOULD be filed, but do not execute `scripts/github.sh`
+- This mode is for quick PR review, not full audit
+
+**Otherwise:**
+- **Scope:** $ARGUMENTS (empty = full `src/`). Resolve module names to directories: `sync` → `src/sync/**`, `github` → `src/github/**`, `utils` → `src/utils/**`, `ui` → `src/ui/**`, `settings` → `src/settings.ts`, `main` → `src/main.ts`, `types` → `src/types.ts`.
+- Perform all 6 directions including issue creation
+
+---
+
+The agent MUST perform the analysis directions in order. The agent is a READ-ONLY auditor for source code — it NEVER modifies `src/**/*.ts` files. It CAN create or update `*.bench.ts` benchmark files and CAN run test commands.
 
 ---
 
@@ -90,9 +104,11 @@ Analyze integration-level coverage:
 
 ---
 
-## Direction 6: Auto-file Issues
+## Direction 6: Auto-file Issues (full mode) / Suggested Issues (--changed mode)
 
-After completing all 5 analysis directions, review your findings and auto-create GitHub issues for **confirmed bugs** and **technical debt**.
+**If `--changed` mode:** Do NOT create issues. Instead, list all findings as "Suggested Issues" in the report with the title, label, and body that WOULD be filed. Format as a table in the report.
+
+**If full mode:** After completing all 5 analysis directions, review your findings and auto-create GitHub issues for **confirmed bugs** and **technical debt**.
 
 ### Step 1: Check existing issues
 
