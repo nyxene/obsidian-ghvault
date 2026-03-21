@@ -161,6 +161,7 @@ export default class GHVaultPlugin extends Plugin {
 
 		const pushEngine = new PushEngine({
 			graphql,
+			client,
 			state,
 			vault: vaultAdapter,
 			logger,

@@ -174,6 +174,65 @@ export class GitHubClient {
 		return response.arrayBuffer;
 	}
 
+	async createBlob(base64Content: string): Promise<string> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const data = await this.post<{ sha: string }>(`/repos/${owner}/${repo}/git/blobs`, {
+			content: base64Content,
+			encoding: "base64",
+		});
+		if (typeof data.sha !== "string") {
+			throw new Error("Invalid blob response from GitHub API");
+		}
+		return data.sha;
+	}
+
+	async createTreeFromEntries(
+		baseTreeSha: string,
+		entries: Array<{ path: string; sha: string; mode?: string }>,
+	): Promise<string> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const tree = entries.map((e) => ({
+			path: e.path,
+			mode: e.mode ?? "100644",
+			type: "blob" as const,
+			sha: e.sha,
+		}));
+		const data = await this.post<{ sha: string }>(`/repos/${owner}/${repo}/git/trees`, {
+			base_tree: baseTreeSha,
+			tree,
+		});
+		if (typeof data.sha !== "string") {
+			throw new Error("Invalid tree response from GitHub API");
+		}
+		return data.sha;
+	}
+
+	async createCommitRest(treeSha: string, parentSha: string, message: string): Promise<string> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const data = await this.post<{ sha: string }>(`/repos/${owner}/${repo}/git/commits`, {
+			message,
+			tree: treeSha,
+			parents: [parentSha],
+		});
+		if (typeof data.sha !== "string") {
+			throw new Error("Invalid commit response from GitHub API");
+		}
+		return data.sha;
+	}
+
+	async updateRef(branch: string, commitSha: string): Promise<void> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		await this.post<{ ref: string }>(
+			`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`,
+			{ sha: commitSha },
+			"PATCH",
+		);
+	}
+
 	async createFile(
 		path: string,
 		content: string,
@@ -237,6 +296,36 @@ export class GitHubClient {
 					"X-GitHub-Api-Version": API_VERSION,
 					"Cache-Control": "no-cache",
 				},
+			});
+		} catch (error: unknown) {
+			throw this.handleRequestError(error, path);
+		}
+
+		this.rateLimiter.updateFromHeaders(response.headers);
+		const json = response.json;
+		if (json === null || json === undefined) {
+			throw new Error(`Invalid API response: expected JSON for ${path}`);
+		}
+		return json as T;
+	}
+
+	private async post<T>(path: string, body: unknown, method = "POST"): Promise<T> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+
+		const url = `${BASE_URL}${path}`;
+		this.logger.debug("GitHub REST write", { method, url });
+
+		let response: RequestUrlResponse;
+		try {
+			response = await requestWithTimeout({
+				url,
+				method,
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+				body: JSON.stringify(body),
 			});
 		} catch (error: unknown) {
 			throw this.handleRequestError(error, path);

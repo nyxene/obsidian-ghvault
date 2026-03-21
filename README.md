@@ -177,7 +177,7 @@ The number of conflicts (or resolved files) is shown in the sync Notice.
 ## Limitations
 
 - **No offline sync** — requires an internet connection. Changes are queued locally but not synced until online.
-- **File size limits** — files over 50MB are skipped (GitHub API limit). Files over 1.5MB use a slower upload path due to GraphQL payload limits.
+- **File size limits** — files over 50MB are skipped (GitHub API limit). Files over 1.5MB are pushed via REST Git Data API (slower but reliable, up to 50MB).
 - **No merge** — conflicting files are resolved by choosing one version (local or remote), not by merging content.
 - **API rate limits** — GitHub allows 5,000 REST requests/hour and 5,000 GraphQL points/hour. Large vaults with thousands of files may hit limits during initial sync.
 - **Single branch** — syncs with one branch at a time. No multi-branch workflows.
