@@ -87,6 +87,23 @@ Never push directly to `main` — always use pull requests.
 - **Benchmarks** in `src/**/*.bench.ts` using vitest bench
 - Run `npm run test:coverage` to check coverage
 
+### Coverage requirements
+
+CI enforces minimum coverage thresholds. PRs that drop coverage below these limits will fail:
+
+| Metric | Minimum |
+|--------|---------|
+| Statements | 90% |
+| Branches | 80% |
+| Functions | 85% |
+| Lines | 90% |
+
+If you add new code, add tests to maintain coverage. Run `npm run test:coverage` locally before pushing.
+
+## Code review
+
+All PRs require maintainer approval before merge (via CODEOWNERS). The maintainer is automatically requested as reviewer on every PR.
+
 ## Architecture
 
 ```
