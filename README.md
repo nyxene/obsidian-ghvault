@@ -1,10 +1,21 @@
-# obsidian-ghvault
+<div align="center">
+<img src="docs/logo.svg" width="152" alt="GHVault">
 
-[![Release](https://img.shields.io/github/v/release/nyxene/obsidian-ghvault?style=flat-square)](https://github.com/nyxene/obsidian-ghvault/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/nyxene/obsidian-ghvault/ci.yml?style=flat-square)](https://github.com/nyxene/obsidian-ghvault/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+# GHVault
+</div>
+<p align="center">
+  <strong>Bidirectional vault-GitHub sync for Obsidian</strong><br>
+  <i>Your vault. Your repo. Always in sync.</i>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Obsidian-plugin-7c3aed?logo=obsidian&logoColor=white" alt="Obsidian Plugin">
+  <img src="https://img.shields.io/badge/platform-desktop%20%7C%20mobile-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/dependencies-1-brightgreen" alt="Dependencies">
+  <img src="https://img.shields.io/badge/tests-637-brightgreen" alt="Tests">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+</p>
 
-**GHVault** — bidirectional vault-GitHub sync plugin for [Obsidian](https://obsidian.md). No git CLI required. Works on desktop and mobile.
+---
 
 Syncs your vault to a GitHub repository using the REST and GraphQL APIs directly — no `git` binary, no shell commands, no desktop-only dependencies. Designed from the ground up to work everywhere Obsidian runs, including iOS and Android.
 

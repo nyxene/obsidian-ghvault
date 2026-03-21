@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="40 40 176 184" fill="none">
+  <!-- Cube: larger dot, left face lighter -->
+  <path d="M128 48 L208 88 L208 176 L128 216 L48 176 L48 88 Z" fill="#0f0f1a"/>
+  <path d="M128 48 L208 88 L128 128 L48 88 Z" fill="#1e1e34"/>
+  <path d="M128 128 L208 88 L208 176 L128 216 Z" fill="#141428"/>
+  <path d="M128 128 L48 88 L48 176 L128 216 Z" fill="#1a1a30"/>
+  <circle cx="128" cy="132" r="14" fill="#7c3aed"/>
+  <circle cx="128" cy="132" r="22" fill="#7c3aed" opacity="0.15"/>
+</svg>
