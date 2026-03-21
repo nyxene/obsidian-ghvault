@@ -8,11 +8,11 @@
   <i>Your vault. Your repo. Always in sync.</i>
 </p>
 <p align="center">
-  <img src="https://img.shields.io/badge/Obsidian-plugin-7c3aed?logo=obsidian&logoColor=white" alt="Obsidian Plugin">
+  <img src="https://img.shields.io/badge/obsidian-plugin-7c3aed?logo=obsidian&logoColor=white" alt="Obsidian Plugin">
   <img src="https://img.shields.io/badge/platform-desktop%20%7C%20mobile-lightgrey" alt="Platform">
-  <img src="https://img.shields.io/badge/dependencies-1-brightgreen" alt="Dependencies">
-  <img src="https://img.shields.io/badge/tests-637-brightgreen" alt="Tests">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="https://github.com/nyxene/obsidian-ghvault/releases"><img src="https://img.shields.io/github/v/release/nyxene/obsidian-ghvault?label=release&logo=github" alt="Release"></a>
+  <a href="https://github.com/nyxene/obsidian-ghvault/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nyxene/obsidian-ghvault/ci.yml?branch=main&label=ci&logo=github-actions&logoColor=white" alt="ci"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/nyxene/obsidian-ghvault" alt="License"></a>
 </p>
 
 ---
