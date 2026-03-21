@@ -202,7 +202,7 @@ function createIntegrationSetup(options: {
 	const syncFolder = options.syncFolder ?? "";
 
 	const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder });
-	const pushEngine = new PushEngine({ graphql, state, vault, logger, syncFolder });
+	const pushEngine = new PushEngine({ graphql, client, state, vault, logger, syncFolder });
 
 	const engine = new SyncEngine({
 		pullEngine,
@@ -781,7 +781,7 @@ describe("Sync integration", () => {
 			const logger = createMockLogger();
 
 			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
-			const pushEngine = new PushEngine({ graphql, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({ graphql, client, state, vault, logger, syncFolder: "" });
 
 			const engine = new SyncEngine({
 				pullEngine,

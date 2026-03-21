@@ -60,9 +60,20 @@ const commitOptions = {
 	message: "sync: update vault",
 };
 
+function createMockClient(): import("../github/client").GitHubClient {
+	return {
+		getCommit: vi.fn().mockResolvedValue({ sha: "head", treeSha: "tree-sha" }),
+		createBlob: vi.fn().mockResolvedValue("blob-sha"),
+		createTreeFromEntries: vi.fn().mockResolvedValue("new-tree-sha"),
+		createCommitRest: vi.fn().mockResolvedValue("new-commit-sha"),
+		updateRef: vi.fn().mockResolvedValue(undefined),
+	} as unknown as import("../github/client").GitHubClient;
+}
+
 function createPushEngine(
 	overrides: {
 		graphql?: GitHubGraphQL;
+		client?: import("../github/client").GitHubClient;
 		state?: SyncStateManager;
 		vault?: VaultReader;
 		logger?: Logger;
@@ -71,6 +82,7 @@ function createPushEngine(
 ): PushEngine {
 	return new PushEngine({
 		graphql: overrides.graphql ?? createMockGraphQL(),
+		client: overrides.client ?? createMockClient(),
 		state: overrides.state ?? createMockState(),
 		vault: overrides.vault ?? createMockVault(),
 		logger: overrides.logger ?? createMockLogger(),
@@ -303,8 +315,9 @@ describe("PushEngine", () => {
 		expect(state.setSHA).not.toHaveBeenCalledWith("huge.bin", expect.any(Object));
 	});
 
-	it("skips files exceeding GraphQL 1.5MB limit", async () => {
+	it("pushes files >1.5MB via REST fallback instead of skipping", async () => {
 		const graphql = createMockGraphQL();
+		const client = createMockClient();
 		const state = createMockState();
 		const vault = createMockVault();
 		const logger = createMockLogger();
@@ -313,7 +326,7 @@ describe("PushEngine", () => {
 			if (path === "large.bin") return Promise.resolve(largeBytes.buffer as ArrayBuffer);
 			return Promise.resolve(new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer);
 		});
-		const engine = createPushEngine({ graphql, state, vault, logger });
+		const engine = createPushEngine({ graphql, client, state, vault, logger });
 
 		const changes: FileChange[] = [
 			{ path: "large.bin", type: "create" },
@@ -321,15 +334,65 @@ describe("PushEngine", () => {
 		];
 		const result = await engine.push(changes, commitOptions);
 
-		expect(result.pushed).toEqual(["small.md"]);
-		expect(logger.warn).toHaveBeenCalledWith(
-			"Skipping large file — exceeds GraphQL payload limit",
-			expect.objectContaining({
-				path: "large.bin",
-				size: expect.any(Number),
-				maxSize: expect.any(Number),
-			}),
-		);
+		// Both files should be pushed — small via GraphQL, large via REST
+		expect(result.pushed).toContain("small.md");
+		expect(result.pushed).toContain("large.bin");
+		// REST client methods should have been called for large file
+		expect(client.createBlob).toHaveBeenCalled();
+		expect(client.createTreeFromEntries).toHaveBeenCalled();
+		expect(client.createCommitRest).toHaveBeenCalled();
+		expect(client.updateRef).toHaveBeenCalled();
+		// GraphQL should also have been called for small file
+		expect(graphql.createCommit).toHaveBeenCalled();
+	});
+
+	it("pushes via REST only when all files >1.5MB (no GraphQL)", async () => {
+		const graphql = createMockGraphQL();
+		const client = createMockClient();
+		const state = createMockState();
+		const vault = createMockVault();
+		const largeBytes = new Uint8Array(1.6 * 1024 * 1024);
+		vi.mocked(vault.readFileBinary).mockResolvedValue(largeBytes.buffer as ArrayBuffer);
+		const engine = createPushEngine({ graphql, client, state, vault });
+
+		const changes: FileChange[] = [
+			{ path: "big1.bin", type: "create" },
+			{ path: "big2.bin", type: "create" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		expect(result.pushed).toContain("big1.bin");
+		expect(result.pushed).toContain("big2.bin");
+		// GraphQL should NOT have been called (no small files)
+		expect(graphql.createCommit).not.toHaveBeenCalled();
+		// REST should have been called
+		expect(client.createBlob).toHaveBeenCalledTimes(2);
+		expect(client.createTreeFromEntries).toHaveBeenCalled();
+		expect(client.createCommitRest).toHaveBeenCalled();
+		expect(client.updateRef).toHaveBeenCalled();
+	});
+
+	it("handles createBlob failure mid-batch without corrupting state", async () => {
+		const graphql = createMockGraphQL();
+		const client = createMockClient();
+		const state = createMockState();
+		const vault = createMockVault();
+		const largeBytes = new Uint8Array(1.6 * 1024 * 1024);
+		vi.mocked(vault.readFileBinary).mockResolvedValue(largeBytes.buffer as ArrayBuffer);
+		// First blob succeeds, second fails
+		(client.createBlob as ReturnType<typeof vi.fn>)
+			.mockResolvedValueOnce("blob-sha-1")
+			.mockRejectedValueOnce(new Error("API rate limit exceeded"));
+		const engine = createPushEngine({ graphql, client, state, vault });
+
+		const changes: FileChange[] = [
+			{ path: "ok.bin", type: "create" },
+			{ path: "fail.bin", type: "create" },
+		];
+
+		await expect(engine.push(changes, commitOptions)).rejects.toThrow("API rate limit exceeded");
+		// State should NOT have been saved (push didn't complete)
+		expect(state.save).not.toHaveBeenCalled();
 	});
 
 	it("stores correct remoteSha (git blob SHA) in cache after push", async () => {
