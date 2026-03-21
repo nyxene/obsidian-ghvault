@@ -1,0 +1,13 @@
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$BRANCH" = "main" ]; then
+  echo "Direct push to main is blocked. Use a feature branch + PR."
+  exit 1
+fi
+
+PATTERN="^(feat|fix|test|docs|perf|refactor|chore)/.*$|^release-please--.*$"
+if ! echo "$BRANCH" | grep -qE "$PATTERN"; then
+  echo "Branch '$BRANCH' does not follow naming convention."
+  echo "Allowed: feat/, fix/, test/, docs/, perf/, refactor/, chore/"
+  exit 1
+fi

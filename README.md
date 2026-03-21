@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/obsidian-plugin-7c3aed?logo=obsidian&logoColor=white" alt="Obsidian Plugin">
   <img src="https://img.shields.io/badge/platform-desktop%20%7C%20mobile-lightgrey" alt="Platform">
   <a href="https://github.com/nyxene/obsidian-ghvault/releases"><img src="https://img.shields.io/github/v/release/nyxene/obsidian-ghvault?label=release&logo=github" alt="Release"></a>
-  <a href="https://github.com/nyxene/obsidian-ghvault/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nyxene/obsidian-ghvault/ci.yml?branch=main&label=ci&logo=github-actions&logoColor=white" alt="ci"></a>
+  <a href="https://github.com/nyxene/obsidian-ghvault/actions/workflows/pr-checks.yml"><img src="https://img.shields.io/github/actions/workflow/status/nyxene/obsidian-ghvault/pr-checks.yml?branch=main&label=checks&logo=github-actions&logoColor=white" alt="ci"></a>
   <a href="https://github.com/nyxene/obsidian-ghvault/actions/workflows/e2e.yml"><img src="https://img.shields.io/github/actions/workflow/status/nyxene/obsidian-ghvault/e2e.yml?label=e2e&logo=github-actions&logoColor=white" alt="e2e"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/nyxene/obsidian-ghvault" alt="License"></a>
 </p>
