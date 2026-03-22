@@ -152,7 +152,9 @@ export default class GHVaultPlugin extends Plugin {
 		});
 
 		const excludePatterns = getEffectiveExcludePatterns(this.settings.excludePatterns);
-		const vaultAdapter = new ObsidianVaultAdapter(this.app.vault, excludePatterns);
+		const vaultAdapter = new ObsidianVaultAdapter(this.app.vault, excludePatterns, (path) =>
+			this.isSyncExcludedByFrontmatter(path),
+		);
 
 		const pullEngine = new PullEngine({
 			client,
@@ -306,6 +308,7 @@ export default class GHVaultPlugin extends Plugin {
 				this.persistPendingChanges(pending);
 			},
 			excludePatterns: getEffectiveExcludePatterns(this.settings.excludePatterns),
+			isSyncExcluded: (path) => this.isSyncExcludedByFrontmatter(path),
 		});
 
 		this.eventRefs = [
@@ -490,6 +493,11 @@ export default class GHVaultPlugin extends Plugin {
 			clearInterval(this.statusRefreshInterval);
 			this.statusRefreshInterval = null;
 		}
+	}
+
+	private isSyncExcludedByFrontmatter(path: string): boolean {
+		const cache = this.app.metadataCache.getCache(path);
+		return cache?.frontmatter?.["ghvault-sync"] === false;
 	}
 
 	private async loadSettings(): Promise<void> {

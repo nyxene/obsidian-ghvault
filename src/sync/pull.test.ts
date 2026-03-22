@@ -817,6 +817,13 @@ describe("PullEngine", () => {
 	});
 
 	describe("ZIP pull strategy", () => {
+		beforeEach(() => {
+			vi.mocked(computeGitBlobSha).mockReset();
+			vi.mocked(computeHashFromBuffer).mockReset();
+			vi.mocked(computeHashFromBuffer).mockResolvedValue("content-hash");
+			vi.mocked(processZipEntries).mockReset();
+		});
+
 		function createManyFiles(count: number): Array<{ path: string; sha: string; size: number }> {
 			return Array.from({ length: count }, (_, i) => ({
 				path: `file-${i}.md`,
@@ -1043,9 +1050,49 @@ describe("PullEngine", () => {
 			expect(result.created).not.toContain(".obsidian/config.json");
 			expect(result.created).not.toContain("ghvault.log");
 		});
+
+		it("handles binary files in ZIP via writeFileBinary", async () => {
+			const files = [...createManyFiles(6), { path: "image.png", sha: "sha-png", size: 200 }];
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				// Text files
+				for (let i = 0; i < 6; i++) {
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(files[i].sha);
+					await onEntry(files[i].path, new TextEncoder().encode("text content"));
+				}
+				// Binary file: bytes with null byte to trigger hasBinaryContent
+				const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]);
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-png");
+				await onEntry("image.png", binaryData);
+				return 7;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			expect(result.created).toHaveLength(7);
+			expect(result.created).toContain("image.png");
+			expect(vault.writeFileBinary).toHaveBeenCalled();
+		});
 	});
 
 	describe("remote rename handling", () => {
+		beforeEach(() => {
+			vi.mocked(computeGitBlobSha).mockReset();
+			vi.mocked(computeHashFromBuffer).mockReset();
+			vi.mocked(computeHashFromBuffer).mockResolvedValue("content-hash");
+		});
+
 		it("renames file via vault.renameFile and updates cache", async () => {
 			const client = createMockClient([{ path: "new-name.md", sha: "sha-new" }]);
 			const state = createMockState({
@@ -1112,8 +1159,517 @@ describe("PullEngine", () => {
 			const renameError = result.errors.find((e) => e.path === "old.md");
 			expect(renameError).toBeDefined();
 			expect(renameError?.error).toContain("File not found");
-			// setSHA should NOT be called for the rename target
-			expect(state.setSHA).not.toHaveBeenCalledWith("new.md", expect.anything());
+			// new.md is still downloaded as a regular create (rename failed,
+			// so renamePaths does not include new.md)
+			expect(result.created).toContain("new.md");
+		});
+	});
+
+	describe("incremental pull via Compare API", () => {
+		beforeEach(() => {
+			vi.mocked(computeGitBlobSha).mockReset();
+			vi.mocked(computeHashFromBuffer).mockReset();
+			vi.mocked(computeHashFromBuffer).mockResolvedValue("content-hash");
+		});
+
+		it("uses Compare API when headOid is set", async () => {
+			const client = createMockClient([{ path: "a.md", sha: "sha-a" }]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 1,
+				files: [{ filename: "a.md", status: "added", sha: "sha-a" }],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const changes = await engine.getRemoteChanges("main");
+			expect(changes).toHaveLength(1);
+			expect(changes[0]).toEqual({ path: "a.md", type: "create" });
+			// Should NOT call getCommit/getTree (incremental path)
+			expect(client.getCommit).not.toHaveBeenCalled();
+			expect(client.getTree).not.toHaveBeenCalled();
+		});
+
+		it("falls back to full tree when headOid is empty (first sync)", async () => {
+			const client = createMockClient([{ path: "a.md", sha: "sha-new" }]);
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			// Should use full tree path
+			expect(client.getCommit).toHaveBeenCalled();
+			expect(client.getTree).toHaveBeenCalled();
+		});
+
+		it("falls back to full tree on diverged status", async () => {
+			const client = createMockClient([{ path: "a.md", sha: "sha-a" }]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "diverged",
+				aheadBy: 5,
+				files: [{ filename: "a.md", status: "modified", sha: "s" }],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			// Should fall back to full tree
+			expect(client.getCommit).toHaveBeenCalled();
+			expect(client.getTree).toHaveBeenCalled();
+		});
+
+		it("falls back to full tree when compare has 300+ files", async () => {
+			const manyFiles = Array.from({ length: 300 }, (_, i) => ({
+				filename: `file-${i}.md`,
+				status: "modified" as const,
+				sha: `sha-${i}`,
+			}));
+
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 300,
+				files: manyFiles,
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			expect(client.getCommit).toHaveBeenCalled();
+			expect(client.getTree).toHaveBeenCalled();
+		});
+
+		it("returns empty changes when remote SHA matches local head", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "same-sha" });
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("same-sha");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const changes = await engine.getRemoteChanges("main");
+			expect(changes).toHaveLength(0);
+		});
+
+		it("applies syncFolder to compare results", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 1,
+				files: [
+					{ filename: "notes/a.md", status: "added", sha: "sha1" },
+					{ filename: "other/b.md", status: "added", sha: "sha2" },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "notes",
+			});
+
+			const changes = await engine.getRemoteChanges("main");
+			// Only notes/a.md should be included (mapped to a.md)
+			expect(changes).toHaveLength(1);
+			expect(changes[0].path).toBe("a.md");
+		});
+
+		it("handles renamed files in compare result", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 1,
+				files: [
+					{
+						filename: "new-name.md",
+						status: "renamed",
+						sha: "sha1",
+						previousFilename: "old-name.md",
+					},
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const changes = await engine.getRemoteChanges("main");
+			expect(changes).toHaveLength(2);
+			expect(changes.find((c) => c.path === "old-name.md")?.type).toBe("delete");
+			expect(changes.find((c) => c.path === "new-name.md")?.type).toBe("create");
+		});
+
+		it("falls back to full tree when compare API throws", async () => {
+			const client = createMockClient([{ path: "a.md", sha: "sha-a" }]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			vi.mocked(client.compareCommits).mockRejectedValue(new Error("404 Not Found"));
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const changes = await engine.getRemoteChanges("main");
+			// Should fall back to full tree
+			expect(client.getCommit).toHaveBeenCalled();
+			expect(client.getTree).toHaveBeenCalled();
+			expect(changes).toHaveLength(1);
+		});
+
+		it("pullIncremental downloads files per-file and processes deletes", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-new";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("new content"),
+					sha: fileSha,
+					size: 11,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "new-file.md", status: "added", sha: fileSha },
+					{ filename: "deleted.md", status: "removed", sha: "sha-del" },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState({ "deleted.md": { remoteSha: "sha-del" } });
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			expect(pullResult.created).toContain("new-file.md");
+			expect(pullResult.deleted).toContain("deleted.md");
+			expect(vault.writeFile).toHaveBeenCalled();
+			expect(vault.deleteFile).toHaveBeenCalledWith("deleted.md");
+			expect(state.setHeadOid).toHaveBeenCalledWith("new-head");
+		});
+
+		it("populates result.modified for modified file status in incremental pull", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-mod";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("modified content"),
+					sha: fileSha,
+					size: 16,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 1,
+				files: [{ filename: "doc.md", status: "modified", sha: fileSha }],
+				headSha: "new-head",
+			});
+
+			const state = createMockState({ "doc.md": { remoteSha: "sha-old" } });
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			expect(pullResult.modified).toContain("doc.md");
+			expect(pullResult.created).not.toContain("doc.md");
+			expect(vault.writeFile).toHaveBeenCalled();
+		});
+
+		it("filters unsafe paths from compare files in incremental pull", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const safeSha = "sha-safe";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(safeSha);
+				return Promise.resolve({
+					content: btoa("safe content"),
+					sha: safeSha,
+					size: 12,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "../etc/passwd", status: "added", sha: "sha-evil" },
+					{ filename: "safe.md", status: "added", sha: safeSha },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			const logger = createMockLogger();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			expect(pullResult.created).toContain("safe.md");
+			expect(pullResult.created).not.toContain("../etc/passwd");
+			expect(pullResult.errors).toEqual(
+				expect.arrayContaining([{ path: "../etc/passwd", error: "Unsafe path rejected" }]),
+			);
+			expect(logger.warn).toHaveBeenCalledWith("Skipping unsafe path from remote", {
+				path: "../etc/passwd",
+			});
+		});
+
+		it("reports rename error in pullIncremental and continues other changes", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-new";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("new content"),
+					sha: fileSha,
+					size: 11,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "renamed.md", status: "renamed", sha: "sha-r", previousFilename: "old.md" },
+					{ filename: "other.md", status: "added", sha: fileSha },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState({ "old.md": { remoteSha: "sha-old" } });
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+			vi.mocked(state.getSHA).mockImplementation((path: string) => {
+				if (path === "old.md") {
+					return {
+						remoteSha: "sha-old",
+						localContentHash: "hash",
+						lastSyncedAt: 1000,
+						size: 10,
+						isBinary: false,
+					};
+				}
+				return undefined;
+			});
+
+			const vault = createMockVault();
+			(vault.renameFile as ReturnType<typeof vi.fn>).mockRejectedValue(
+				new Error("File not found: old.md"),
+			);
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main", undefined, [
+				{ oldPath: "old.md", newPath: "renamed.md" },
+			]);
+
+			// Rename failed → error reported
+			const renameError = pullResult.errors.find((e) => e.path === "old.md");
+			expect(renameError).toBeDefined();
+			expect(renameError?.error).toContain("File not found");
+			// Other changes should still proceed
+			expect(pullResult.created).toContain("other.md");
+			expect(vault.writeFile).toHaveBeenCalled();
+		});
+
+		it("filters exclude patterns from compare files in incremental pull", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-ok";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("ok"),
+					sha: fileSha,
+					size: 2,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "private/secret.md", status: "added", sha: "sha-secret" },
+					{ filename: "public.md", status: "added", sha: fileSha },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+				excludePatterns: ["private/**"],
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			expect(pullResult.created).toContain("public.md");
+			expect(pullResult.created).not.toContain("private/secret.md");
+			// Excluded file should not be downloaded
+			expect(vault.writeFile).toHaveBeenCalledTimes(1);
+		});
+
+		it("reports delete error in pullIncremental and continues", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-new";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("new"),
+					sha: fileSha,
+					size: 3,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "removed.md", status: "removed", sha: "sha-del" },
+					{ filename: "added.md", status: "added", sha: fileSha },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState({ "removed.md": { remoteSha: "sha-del" } });
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			(vault.deleteFile as ReturnType<typeof vi.fn>).mockRejectedValue(
+				new Error("Permission denied"),
+			);
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			// Delete failed → error reported
+			const deleteError = pullResult.errors.find((e) => e.path === "removed.md");
+			expect(deleteError).toBeDefined();
+			expect(deleteError?.error).toContain("Permission denied");
+			// Other changes still proceed
+			expect(pullResult.created).toContain("added.md");
 		});
 	});
 

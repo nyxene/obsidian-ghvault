@@ -426,4 +426,40 @@ describe("ChangeQueue", () => {
 			expect(changes).toContainEqual({ path: "new-name.md", type: "create" });
 		});
 	});
+
+	describe("frontmatter sync exclusion", () => {
+		it("skips files where isSyncExcluded returns true", () => {
+			const onReady = vi.fn();
+			const isSyncExcluded = vi.fn((path: string) => path === "draft.md");
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, isSyncExcluded });
+
+			queue.push("draft.md", "modify");
+			queue.push("published.md", "modify");
+
+			expect(queue.size).toBe(1);
+			const changes = queue.flush();
+			expect(changes).toEqual([{ path: "published.md", type: "modify" }]);
+		});
+
+		it("includes files where isSyncExcluded returns false", () => {
+			const onReady = vi.fn();
+			const isSyncExcluded = vi.fn().mockReturnValue(false);
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, isSyncExcluded });
+
+			queue.push("note.md", "create");
+
+			expect(queue.size).toBe(1);
+		});
+
+		it("does not trigger debounce for excluded files only", () => {
+			const onReady = vi.fn();
+			const isSyncExcluded = vi.fn().mockReturnValue(true);
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady, isSyncExcluded });
+
+			queue.push("draft.md", "modify");
+
+			vi.advanceTimersByTime(1500);
+			expect(onReady).not.toHaveBeenCalled();
+		});
+	});
 });

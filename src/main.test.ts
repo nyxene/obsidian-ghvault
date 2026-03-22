@@ -227,7 +227,8 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 			Promise.resolve(loadDataResult ? JSON.parse(JSON.stringify(loadDataResult)) : null),
 		);
 	plugin.saveData = vi.fn().mockResolvedValue(undefined);
-	plugin.app = { vault } as AnyPlugin;
+	const metadataCache = { getCache: vi.fn().mockReturnValue(null) };
+	plugin.app = { vault, metadataCache } as AnyPlugin;
 
 	const statusBarEl = createMockElement();
 	let ribbonCallback: () => void = () => {};

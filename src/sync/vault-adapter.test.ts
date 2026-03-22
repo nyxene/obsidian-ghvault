@@ -534,4 +534,60 @@ describe("ObsidianVaultAdapter", () => {
 			expect(vault.cachedRead).toHaveBeenCalled();
 		});
 	});
+
+	describe("frontmatter sync exclusion", () => {
+		it("excludes files where isSyncExcluded returns true", async () => {
+			const vault = createMockVault([
+				{ path: "draft.md", content: "draft", size: 5 },
+				{ path: "published.md", content: "published", size: 9 },
+			]);
+			const isSyncExcluded = vi.fn((path: string) => path === "draft.md");
+			const adapter = new ObsidianVaultAdapter(vault, undefined, isSyncExcluded);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].path).toBe("published.md");
+			expect(isSyncExcluded).toHaveBeenCalledWith("draft.md");
+			expect(isSyncExcluded).toHaveBeenCalledWith("published.md");
+		});
+
+		it("includes all files when isSyncExcluded is not provided", async () => {
+			const vault = createMockVault([
+				{ path: "a.md", content: "a", size: 1 },
+				{ path: "b.md", content: "b", size: 1 },
+			]);
+			const adapter = new ObsidianVaultAdapter(vault);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(2);
+		});
+
+		it("includes files where isSyncExcluded returns false", async () => {
+			const vault = createMockVault([{ path: "note.md", content: "note", size: 4 }]);
+			const isSyncExcluded = vi.fn().mockReturnValue(false);
+			const adapter = new ObsidianVaultAdapter(vault, undefined, isSyncExcluded);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].path).toBe("note.md");
+		});
+
+		it("combines exclude patterns with frontmatter exclusion", async () => {
+			const vault = createMockVault([
+				{ path: ".obsidian/config", content: "{}", size: 2 },
+				{ path: "draft.md", content: "draft", size: 5 },
+				{ path: "published.md", content: "ok", size: 2 },
+			]);
+			const isSyncExcluded = vi.fn((path: string) => path === "draft.md");
+			const adapter = new ObsidianVaultAdapter(vault, [".obsidian/**"], isSyncExcluded);
+
+			const files = await adapter.listFiles();
+
+			expect(files).toHaveLength(1);
+			expect(files[0].path).toBe("published.md");
+		});
+	});
 });
