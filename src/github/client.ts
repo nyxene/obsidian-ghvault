@@ -34,12 +34,18 @@ export interface FileContentResponse {
 	size: number;
 }
 
+interface ETagCacheEntry {
+	etag: string;
+	data: unknown;
+}
+
 export class GitHubClient {
 	private readonly token: string;
 	private readonly owner: string;
 	private readonly repo: string;
 	private readonly logger: Logger;
 	private readonly rateLimiter: RateLimiter;
+	private readonly etagCache = new Map<string, ETagCacheEntry>();
 
 	constructor(options: GitHubClientOptions) {
 		this.token = options.token;
@@ -285,23 +291,45 @@ export class GitHubClient {
 		const url = `${BASE_URL}${path}`;
 		this.logger.debug("GitHub REST request", { method: "GET", url });
 
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${this.token}`,
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": API_VERSION,
+			"Cache-Control": "no-cache",
+		};
+
+		const cached = this.etagCache.get(path);
+		if (cached) {
+			headers["If-None-Match"] = cached.etag;
+		}
+
 		let response: RequestUrlResponse;
 		try {
 			response = await requestWithTimeout({
 				url,
 				method: "GET",
-				headers: {
-					Authorization: `Bearer ${this.token}`,
-					Accept: "application/vnd.github+json",
-					"X-GitHub-Api-Version": API_VERSION,
-					"Cache-Control": "no-cache",
-				},
+				headers,
 			});
 		} catch (error: unknown) {
+			const status = (error as { status?: number }).status;
+			if (status === 304 && cached) {
+				this.logger.debug("GitHub REST 304 Not Modified (ETag hit)", { url });
+				const errorHeaders = (error as { headers?: Record<string, string> }).headers;
+				if (errorHeaders) {
+					this.rateLimiter.updateFromHeaders(errorHeaders);
+				}
+				return cached.data as T;
+			}
 			throw this.handleRequestError(error, path);
 		}
 
 		this.rateLimiter.updateFromHeaders(response.headers);
+
+		const etag = response.headers.etag ?? response.headers.ETag;
+		if (etag) {
+			this.etagCache.set(path, { etag, data: response.json });
+		}
+
 		const json = response.json;
 		if (json === null || json === undefined) {
 			throw new Error(`Invalid API response: expected JSON for ${path}`);
