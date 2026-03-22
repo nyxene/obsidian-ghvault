@@ -6,6 +6,7 @@ export interface ChangeQueueOptions {
 	onReady: () => void;
 	onPersist?: (pending: Record<string, ChangeType>) => void;
 	excludePatterns?: readonly string[];
+	isSyncExcluded?: (path: string) => boolean;
 }
 
 export class ChangeQueue {
@@ -15,6 +16,7 @@ export class ChangeQueue {
 	private readonly onReady: () => void;
 	private readonly onPersist?: (pending: Record<string, ChangeType>) => void;
 	private readonly excludePatterns?: readonly string[];
+	private readonly isSyncExcluded?: (path: string) => boolean;
 	private persistScheduled = false;
 	private paused = false;
 
@@ -23,10 +25,12 @@ export class ChangeQueue {
 		this.onReady = options.onReady;
 		this.onPersist = options.onPersist;
 		this.excludePatterns = options.excludePatterns;
+		this.isSyncExcluded = options.isSyncExcluded;
 	}
 
 	push(path: string, type: ChangeType): void {
 		if (isExcluded(path, this.excludePatterns)) return;
+		if (this.isSyncExcluded?.(path)) return;
 
 		const existing = this.pending.get(path);
 		if (existing) {

@@ -36,10 +36,16 @@ const TEXT_EXTENSIONS = new Set([
 export class ObsidianVaultAdapter implements SyncVault {
 	private readonly vault: Vault;
 	private readonly excludePatterns?: readonly string[];
+	private readonly isSyncExcluded?: (path: string) => boolean;
 
-	constructor(vault: Vault, excludePatterns?: readonly string[]) {
+	constructor(
+		vault: Vault,
+		excludePatterns?: readonly string[],
+		isSyncExcluded?: (path: string) => boolean,
+	) {
 		this.vault = vault;
 		this.excludePatterns = excludePatterns;
+		this.isSyncExcluded = isSyncExcluded;
 	}
 
 	async readFile(path: string): Promise<string> {
@@ -96,7 +102,9 @@ export class ObsidianVaultAdapter implements SyncVault {
 
 	async listFiles(cache?: Readonly<Record<string, SHACacheEntry>>): Promise<LocalFileInfo[]> {
 		const allFiles = this.vault.getFiles();
-		const files = allFiles.filter((f) => !isExcluded(f.path, this.excludePatterns));
+		const files = allFiles.filter(
+			(f) => !isExcluded(f.path, this.excludePatterns) && !this.isSyncExcluded?.(f.path),
+		);
 
 		return pMap(
 			files,

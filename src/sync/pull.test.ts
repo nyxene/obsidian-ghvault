@@ -817,6 +817,13 @@ describe("PullEngine", () => {
 	});
 
 	describe("ZIP pull strategy", () => {
+		beforeEach(() => {
+			vi.mocked(computeGitBlobSha).mockReset();
+			vi.mocked(computeHashFromBuffer).mockReset();
+			vi.mocked(computeHashFromBuffer).mockResolvedValue("content-hash");
+			vi.mocked(processZipEntries).mockReset();
+		});
+
 		function createManyFiles(count: number): Array<{ path: string; sha: string; size: number }> {
 			return Array.from({ length: count }, (_, i) => ({
 				path: `file-${i}.md`,
@@ -1043,9 +1050,49 @@ describe("PullEngine", () => {
 			expect(result.created).not.toContain(".obsidian/config.json");
 			expect(result.created).not.toContain("ghvault.log");
 		});
+
+		it("handles binary files in ZIP via writeFileBinary", async () => {
+			const files = [...createManyFiles(6), { path: "image.png", sha: "sha-png", size: 200 }];
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				// Text files
+				for (let i = 0; i < 6; i++) {
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(files[i].sha);
+					await onEntry(files[i].path, new TextEncoder().encode("text content"));
+				}
+				// Binary file: bytes with null byte to trigger hasBinaryContent
+				const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]);
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-png");
+				await onEntry("image.png", binaryData);
+				return 7;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			expect(result.created).toHaveLength(7);
+			expect(result.created).toContain("image.png");
+			expect(vault.writeFileBinary).toHaveBeenCalled();
+		});
 	});
 
 	describe("remote rename handling", () => {
+		beforeEach(() => {
+			vi.mocked(computeGitBlobSha).mockReset();
+			vi.mocked(computeHashFromBuffer).mockReset();
+			vi.mocked(computeHashFromBuffer).mockResolvedValue("content-hash");
+		});
+
 		it("renames file via vault.renameFile and updates cache", async () => {
 			const client = createMockClient([{ path: "new-name.md", sha: "sha-new" }]);
 			const state = createMockState({
@@ -1112,8 +1159,9 @@ describe("PullEngine", () => {
 			const renameError = result.errors.find((e) => e.path === "old.md");
 			expect(renameError).toBeDefined();
 			expect(renameError?.error).toContain("File not found");
-			// setSHA should NOT be called for the rename target
-			expect(state.setSHA).not.toHaveBeenCalledWith("new.md", expect.anything());
+			// new.md is still downloaded as a regular create (rename failed,
+			// so renamePaths does not include new.md)
+			expect(result.created).toContain("new.md");
 		});
 	});
 
@@ -1530,6 +1578,98 @@ describe("PullEngine", () => {
 			// Other changes should still proceed
 			expect(pullResult.created).toContain("other.md");
 			expect(vault.writeFile).toHaveBeenCalled();
+		});
+
+		it("filters exclude patterns from compare files in incremental pull", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-ok";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("ok"),
+					sha: fileSha,
+					size: 2,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "private/secret.md", status: "added", sha: "sha-secret" },
+					{ filename: "public.md", status: "added", sha: fileSha },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+				excludePatterns: ["private/**"],
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			expect(pullResult.created).toContain("public.md");
+			expect(pullResult.created).not.toContain("private/secret.md");
+			// Excluded file should not be downloaded
+			expect(vault.writeFile).toHaveBeenCalledTimes(1);
+		});
+
+		it("reports delete error in pullIncremental and continues", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "new-head" });
+			const fileSha = "sha-new";
+			vi.mocked(client.getFileContent).mockImplementation(() => {
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(fileSha);
+				return Promise.resolve({
+					content: btoa("new"),
+					sha: fileSha,
+					size: 3,
+				});
+			});
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 2,
+				files: [
+					{ filename: "removed.md", status: "removed", sha: "sha-del" },
+					{ filename: "added.md", status: "added", sha: fileSha },
+				],
+				headSha: "new-head",
+			});
+
+			const state = createMockState({ "removed.md": { remoteSha: "sha-del" } });
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const vault = createMockVault();
+			(vault.deleteFile as ReturnType<typeof vi.fn>).mockRejectedValue(
+				new Error("Permission denied"),
+			);
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger: createMockLogger(),
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+			const pullResult = await engine.pull("main");
+
+			// Delete failed → error reported
+			const deleteError = pullResult.errors.find((e) => e.path === "removed.md");
+			expect(deleteError).toBeDefined();
+			expect(deleteError?.error).toContain("Permission denied");
+			// Other changes still proceed
+			expect(pullResult.created).toContain("added.md");
 		});
 	});
 });
