@@ -557,7 +557,7 @@ describe("GHVaultPlugin", () => {
 			expect(statusBarEl.setText).toHaveBeenCalledWith("GHVault: idle");
 		});
 
-		it("transitions idle -> syncing -> idle on successful sync", async () => {
+		it("transitions idle -> syncing -> synced just now on successful sync (manual mode)", async () => {
 			const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
 			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
 
@@ -566,7 +566,7 @@ describe("GHVaultPlugin", () => {
 			const calls = vi
 				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
 				.mock.calls.map((c: unknown[]) => c[0]);
-			expect(calls).toEqual(["GHVault: syncing...", "GHVault: idle"]);
+			expect(calls).toEqual(["GHVault: syncing...", "GHVault: synced just now"]);
 		});
 
 		it("transitions idle -> syncing -> error on failed sync", async () => {
@@ -1483,6 +1483,241 @@ describe("GHVaultPlugin", () => {
 			expect(calls).toContain("GHVault: syncing...");
 			// The last call should be "syncing..." not "idle" (since statusBarEl was null)
 			expect(calls[calls.length - 1]).toBe("GHVault: syncing...");
+		});
+	});
+
+	describe("formatRelativeTime", () => {
+		it("returns 'synced just now' for < 60 seconds", async () => {
+			const { formatRelativeTime } = await import("./main");
+			const now = Date.now();
+			expect(formatRelativeTime(now, now)).toBe("synced just now");
+			expect(formatRelativeTime(now - 59_000, now)).toBe("synced just now");
+		});
+
+		it("returns minutes for 60s–59min", async () => {
+			const { formatRelativeTime } = await import("./main");
+			const now = Date.now();
+			expect(formatRelativeTime(now - 60_000, now)).toBe("synced 1 min ago");
+			expect(formatRelativeTime(now - 120_000, now)).toBe("synced 2 min ago");
+			expect(formatRelativeTime(now - 59 * 60_000, now)).toBe("synced 59 min ago");
+		});
+
+		it("returns hours for 1h–23h", async () => {
+			const { formatRelativeTime } = await import("./main");
+			const now = Date.now();
+			expect(formatRelativeTime(now - 60 * 60_000, now)).toBe("synced 1 hr ago");
+			expect(formatRelativeTime(now - 3 * 60 * 60_000, now)).toBe("synced 3 hr ago");
+			expect(formatRelativeTime(now - 23 * 60 * 60_000, now)).toBe("synced 23 hr ago");
+		});
+
+		it("returns days for >= 24h", async () => {
+			const { formatRelativeTime } = await import("./main");
+			const now = Date.now();
+			expect(formatRelativeTime(now - 24 * 60 * 60_000, now)).toBe("synced 1 d ago");
+			expect(formatRelativeTime(now - 7 * 24 * 60 * 60_000, now)).toBe("synced 7 d ago");
+		});
+	});
+
+	describe("formatAbsoluteTime", () => {
+		it("returns zero-padded HH:MM", async () => {
+			const { formatAbsoluteTime } = await import("./main");
+			// 2026-01-15 at 09:05 local time
+			const date = new Date(2026, 0, 15, 9, 5);
+			expect(formatAbsoluteTime(date.getTime())).toBe("synced 09:05");
+		});
+
+		it("handles afternoon times", async () => {
+			const { formatAbsoluteTime } = await import("./main");
+			const date = new Date(2026, 0, 15, 14, 32);
+			expect(formatAbsoluteTime(date.getTime())).toBe("synced 14:32");
+		});
+
+		it("handles midnight", async () => {
+			const { formatAbsoluteTime } = await import("./main");
+			const date = new Date(2026, 0, 15, 0, 0);
+			expect(formatAbsoluteTime(date.getTime())).toBe("synced 00:00");
+		});
+	});
+
+	describe("last synced status bar", () => {
+		const AUTO_SYNC_SETTINGS = {
+			settings: {
+				...CONFIGURED_SETTINGS.settings,
+				autoSync: true,
+				autoSyncDebounce: 10,
+				autoSyncPullInterval: 300,
+			},
+		};
+
+		it("shows 'synced HH:MM' after successful sync with autoSync ON", async () => {
+			const { statusBarEl, plugin } = await loadPlugin(AUTO_SYNC_SETTINGS);
+			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+			await plugin.runSync();
+
+			const calls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+
+			expect(calls[0]).toBe("GHVault: syncing...");
+			expect(calls[1]).toMatch(/^GHVault: synced \d{2}:\d{2}$/);
+		});
+
+		it("shows 'synced just now' after successful sync with autoSync OFF", async () => {
+			const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+			await plugin.runSync();
+
+			const calls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+
+			expect(calls).toEqual(["GHVault: syncing...", "GHVault: synced just now"]);
+		});
+
+		it("shows 'idle' when no sync has been performed yet", async () => {
+			const { statusBarEl } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(statusBarEl.setText).toHaveBeenCalledWith("GHVault: idle");
+		});
+
+		it("starts refresh interval in manual mode after sync", async () => {
+			vi.useFakeTimers();
+			try {
+				const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+				await plugin.runSync();
+				vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+				// Advance 30s — interval should fire and update text
+				vi.advanceTimersByTime(30_000);
+
+				expect(statusBarEl.setText).toHaveBeenCalled();
+				const setCalls = vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mock.calls;
+				const lastCall = setCalls[setCalls.length - 1]?.[0] as string;
+				expect(lastCall).toMatch(/^GHVault: synced (just now|1 min ago)$/);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("does not start refresh interval in auto-sync mode after sync", async () => {
+			vi.useFakeTimers();
+			try {
+				const { statusBarEl, plugin } = await loadPlugin(AUTO_SYNC_SETTINGS);
+
+				await plugin.runSync();
+				vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+				// Advance 30s — no additional calls expected
+				vi.advanceTimersByTime(30_000);
+
+				expect(statusBarEl.setText).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("clears refresh interval on syncing state", async () => {
+			vi.useFakeTimers();
+			try {
+				const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+				// Trigger sync to set lastSuccessfulSyncAt and start interval
+				await plugin.runSync();
+				vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+				// Start another sync — should clear interval
+				plugin.setStatus("syncing...");
+				vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+				// Advance 30s — interval should NOT fire
+				vi.advanceTimersByTime(30_000);
+				expect(statusBarEl.setText).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("clears refresh interval on unload", async () => {
+			vi.useFakeTimers();
+			try {
+				const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+				await plugin.runSync();
+				vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+				await plugin.onunload();
+
+				// Advance 30s — interval should NOT fire
+				vi.advanceTimersByTime(30_000);
+				expect(statusBarEl.setText).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("preserves lastSuccessfulSyncAt after error and shows it on next success", async () => {
+			const { statusBarEl, plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			// First successful sync
+			await plugin.runSync();
+
+			// Reset cooldown so next runSync() is not throttled
+			plugin.lastSyncAt = 0;
+
+			// Failed sync
+			mockSync.mockRejectedValueOnce(new Error("Network error"));
+			await plugin.runSync();
+			const errorCalls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+			expect(errorCalls).toContain("GHVault: error");
+
+			// Reset cooldown again
+			plugin.lastSyncAt = 0;
+
+			// Next successful sync
+			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: null,
+				conflicts: [],
+				resolvedCount: 0,
+				renames: [],
+			});
+			await plugin.runSync();
+
+			const finalCalls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+			expect(finalCalls).toContain("GHVault: synced just now");
+		});
+
+		it("switches display format when autoSync is toggled via settings", async () => {
+			const { statusBarEl, plugin, onSave } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			// Sync in manual mode → "synced just now"
+			await plugin.runSync();
+			const manualCalls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+			expect(manualCalls).toContain("GHVault: synced just now");
+
+			vi.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>).mockClear();
+
+			// Toggle autoSync ON → should re-render with HH:MM format
+			await onSave({
+				...CONFIGURED_SETTINGS.settings,
+				autoSync: true,
+				autoSyncDebounce: 10,
+				autoSyncPullInterval: 300,
+			});
+
+			const autoCalls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+			expect(autoCalls.some((c) => /^GHVault: synced \d{2}:\d{2}$/.test(c))).toBe(true);
 		});
 	});
 });
