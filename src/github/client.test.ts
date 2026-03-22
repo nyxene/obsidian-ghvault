@@ -1,5 +1,5 @@
 import { requestUrl } from "obsidian";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	GitHubAuthError,
 	GitHubConflictError,
@@ -477,6 +477,162 @@ describe("GitHubClient", () => {
 			const arg = lastCall[0];
 			const url = typeof arg === "string" ? arg : (arg as { url: string }).url;
 			expect(url).toContain("/zipball/main");
+		});
+	});
+
+	describe("ETag conditional requests", () => {
+		beforeEach(() => {
+			mockRequest.mockReset();
+		});
+
+		function mockResponseOnce(json: unknown, headers: Record<string, string> = {}): void {
+			mockRequest.mockResolvedValueOnce({
+				json,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+					...headers,
+				},
+				status: 200,
+				text: JSON.stringify(json),
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+		}
+
+		it("caches ETag from response", async () => {
+			const refData = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			mockResponseOnce(refData, { etag: '"etag-value-1"' });
+
+			const client = createClient();
+			await client.getRef("main");
+
+			// biome-ignore lint/suspicious/noExplicitAny: access private field for testing
+			const cache = (client as any).etagCache as Map<string, { etag: string; data: unknown }>;
+			expect(cache.size).toBe(1);
+			const entry = [...cache.values()][0];
+			expect(entry.etag).toBe('"etag-value-1"');
+		});
+
+		it("sends If-None-Match on subsequent request when ETag cached", async () => {
+			const refData = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			mockResponseOnce(refData, { etag: '"etag-value-1"' });
+			mockResponseOnce(refData, { etag: '"etag-value-1"' });
+
+			const client = createClient();
+			await client.getRef("main");
+			await client.getRef("main");
+
+			const secondCall = mockRequest.mock.calls[1][0] as { headers: Record<string, string> };
+			expect(secondCall.headers["If-None-Match"]).toBe('"etag-value-1"');
+		});
+
+		it("returns cached data on 304 Not Modified", async () => {
+			const refData = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			mockResponseOnce(refData, { etag: '"etag-value-1"' });
+
+			const client = createClient();
+			const first = await client.getRef("main");
+
+			// 304 response (thrown as error by requestUrl)
+			mockRequest.mockRejectedValueOnce({
+				status: 304,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+			});
+
+			const second = await client.getRef("main");
+			expect(second).toEqual(first);
+		});
+
+		it("updates rate limiter from 304 headers", async () => {
+			const refData = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			mockResponseOnce(refData, { etag: '"etag-1"' });
+
+			const rateLimiter = new RateLimiter();
+			const client = createClient(rateLimiter);
+			await client.getRef("main");
+
+			// 304 with updated rate limit
+			mockRequest.mockRejectedValueOnce({
+				status: 304,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4500",
+					"x-ratelimit-reset": "1700000000",
+				},
+			});
+
+			await client.getRef("main");
+			const state = rateLimiter.getState("rest");
+			expect(state?.remaining).toBe(4500);
+		});
+
+		it("updates cache when server returns 200 with new ETag", async () => {
+			const data1 = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			const data2 = { ref: "refs/heads/main", object: { sha: "def456" } };
+
+			mockResponseOnce(data1, { etag: '"etag-1"' });
+			mockResponseOnce(data2, { etag: '"etag-2"' });
+			mockResponseOnce(data2, { etag: '"etag-2"' });
+
+			const client = createClient();
+			await client.getRef("main");
+
+			const result = await client.getRef("main");
+			expect(result.sha).toBe("def456");
+
+			// Third request should use new ETag
+			await client.getRef("main");
+			const thirdCall = mockRequest.mock.calls[2][0] as { headers: Record<string, string> };
+			expect(thirdCall.headers["If-None-Match"]).toBe('"etag-2"');
+		});
+
+		it("does not send If-None-Match on first request", async () => {
+			mockResponseOnce({ ref: "refs/heads/main", object: { sha: "abc123" } });
+
+			const client = createClient();
+			await client.getRef("main");
+
+			const firstCall = mockRequest.mock.calls[0][0] as { headers: Record<string, string> };
+			expect(firstCall.headers["If-None-Match"]).toBeUndefined();
+		});
+
+		it("does not cache when response has no ETag header", async () => {
+			mockResponseOnce({ ref: "refs/heads/main", object: { sha: "abc123" } });
+			mockResponseOnce({ ref: "refs/heads/main", object: { sha: "abc123" } });
+
+			const client = createClient();
+			await client.getRef("main");
+			await client.getRef("main");
+
+			const secondCall = mockRequest.mock.calls[1][0] as { headers: Record<string, string> };
+			expect(secondCall.headers["If-None-Match"]).toBeUndefined();
+		});
+
+		it("throws non-304 errors normally even when cache exists", async () => {
+			const refData = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			mockResponseOnce(refData, { etag: '"etag-1"' });
+
+			const client = createClient();
+			await client.getRef("main");
+
+			mockError(401);
+			await expect(client.getRef("main")).rejects.toThrow();
+		});
+
+		it("throws 304 as error when no cache exists", async () => {
+			const client = createClient();
+
+			mockRequest.mockRejectedValueOnce({
+				status: 304,
+				headers: {},
+			});
+
+			await expect(client.getRef("main")).rejects.toBeDefined();
 		});
 	});
 });

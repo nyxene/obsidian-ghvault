@@ -3,6 +3,7 @@ import type { ObsidianCapabilityOptions } from "wdio-obsidian-service";
 export const config: WebdriverIO.Config = {
 	runner: "local",
 	specs: ["./tests/e2e/specs/**/*.spec.mts"],
+	exclude: ["./tests/e2e/specs/screenshots.spec.mts"],
 	maxInstances: 1,
 
 	capabilities: [
