@@ -41,14 +41,16 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Remote pull check** — periodically checks for remote changes and pulls them automatically, with adaptive backoff when idle
 - **Mobile-first** — works on iOS, Android, and desktop equally
 - **No git CLI** — uses GitHub REST API for reads and GraphQL `createCommitOnBranch` for writes
-- **Conflict resolution** — configurable strategy for files changed on both sides: skip (default), local-wins, remote-wins, or ask (interactive per-file modal)
+- **Conflict resolution** — configurable strategy for files changed on both sides: skip (default), local-wins, remote-wins, or ask (interactive modal with inline diff view and per-hunk accept/reject)
 - **Rename detection** — detects file renames (delete + create with same content) in both directions, reports them in sync notices
 - **File history** — view commit history for any file via "Show file history" command, with pagination
 - **Automatic GPG signing** — commits made via GraphQL are signed by GitHub automatically
 - **Rate limit aware** — tracks GitHub API rate limits and pauses before hitting them
 - **SHA integrity checks** — verifies downloaded file content matches GitHub's reported SHA
 - **Subfolder sync** — sync a specific folder in the repo instead of the entire repository
-- **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced, plus custom exclude patterns (e.g. `drafts/**`, `*.tmp`)
+- **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced, plus custom exclude patterns (e.g. `drafts/**`, `*.tmp`) and per-file opt-out via `ghvault-sync: false` in frontmatter
+- **Incremental sync** — uses GitHub Compare API for efficient change detection (only fetches delta, not full tree)
+- **ETag caching** — conditional requests on polling (304 Not Modified = free, no rate limit cost)
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
 - **Crash recovery** — pending changes are persisted to disk and restored after restart
 
@@ -115,7 +117,7 @@ The status bar shows the current state:
 
 ### Conflict resolution modal
 
-When using the "Ask" strategy, a modal appears listing each conflicted file with per-file choices:
+When using the "Ask" strategy, a modal appears listing each conflicted file. Click on a file to expand an inline diff view with color-coded changes (red = removed, green = added) and line numbers. Choose "Keep Local" or "Keep Remote" for the entire file, or use per-hunk "Local"/"Remote" buttons to cherry-pick changes from each side:
 
 ![Conflict resolution modal](docs/screenshots/conflict-modal.png)
 
@@ -170,7 +172,7 @@ When the same file is changed both locally and on GitHub between syncs, GHVault 
 | **Skip** (default) | Skip the file on both sides — neither version is overwritten |
 | **Local wins** | Push the local version to GitHub, overwriting the remote |
 | **Remote wins** | Pull the remote version to the vault, overwriting the local |
-| **Ask** | Show a modal listing each conflict — choose "Keep Local" or "Keep Remote" per file |
+| **Ask** | Show a modal with inline diff view — choose "Keep Local" / "Keep Remote" per file, or cherry-pick per hunk |
 
 The number of conflicts (or resolved files) is shown in the sync Notice.
 
@@ -178,7 +180,7 @@ The number of conflicts (or resolved files) is shown in the sync Notice.
 
 - **No offline sync** — requires an internet connection. Changes are queued locally but not synced until online.
 - **File size limits** — files over 50MB are skipped (GitHub API limit). Files over 1.5MB are pushed via REST Git Data API (slower but reliable, up to 50MB).
-- **No merge** — conflicting files are resolved by choosing one version (local or remote), not by merging content.
+- **No line-level merge** — conflicts are resolved per file or per hunk (chunk of changed lines), not by merging individual lines within a hunk.
 - **API rate limits** — GitHub allows 5,000 REST requests/hour and 5,000 GraphQL points/hour. Large vaults with thousands of files may hit limits during initial sync.
 - **Single branch** — syncs with one branch at a time. No multi-branch workflows.
 - **No real-time sync** — remote changes are detected via periodic polling (not webhooks/websockets). The default check interval is 5 minutes, with adaptive backoff when idle.
@@ -247,6 +249,11 @@ src/
     change-queue.ts        # Debounced event queue for auto-sync
     state.ts               # SHA cache + sync state
     vault-adapter.ts       # Obsidian Vault API adapter
+  ui/
+    conflict-modal.ts      # Conflict resolution modal with diff view
+    diff.ts                # Line-based diff algorithm (LCS)
+    file-history-modal.ts  # File commit history modal
+    status-bar.ts          # Status bar widget
   utils/
     base64.ts              # Base64 encode/decode
     concurrency.ts         # Controlled parallel execution

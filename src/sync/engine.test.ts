@@ -65,7 +65,10 @@ function createEngine(
 		state?: SyncStateManager;
 		vault?: SyncVault;
 		conflictStrategy?: ConflictStrategy;
-		onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
+		onConflict?: (
+			conflicts: ConflictInfo[],
+			contentProvider: unknown,
+		) => Promise<ConflictDecision[]>;
 	} = {},
 ) {
 	const pullEngine = overrides.pullEngine ?? createMockPullEngine();
@@ -514,6 +517,10 @@ describe("SyncEngine", () => {
 					expect.objectContaining({ path: "a.md" }),
 					expect.objectContaining({ path: "b.md" }),
 				]),
+				expect.objectContaining({
+					getLocalContent: expect.any(Function),
+					getRemoteContent: expect.any(Function),
+				}),
 			);
 			expect(result.conflicts).toHaveLength(2);
 			expect(result.resolvedCount).toBe(2);
@@ -636,6 +643,59 @@ describe("SyncEngine", () => {
 				expect.any(Array),
 			);
 			expect(pushEngine.push).not.toHaveBeenCalled();
+		});
+
+		it("ask: merged resolution writes merged content and pushes file", async () => {
+			const remoteChanges: FileChange[] = [{ path: "file.md", type: "modify" }];
+			const pullResult: PullResult = {
+				created: [],
+				modified: [],
+				deleted: [],
+				renamed: [],
+				errors: [],
+			};
+			const pullEngine = createMockPullEngine(pullResult, remoteChanges);
+
+			const vault = createMockVault([{ path: "file.md", contentHash: "new-local-hash", size: 10 }]);
+			const state = createMockState({
+				"file.md": {
+					remoteSha: "old-sha",
+					localContentHash: "old-local-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			});
+			const pushResult: PushResult = { pushed: ["file.md"], deleted: [], oid: "new-oid" };
+			const pushEngine = createMockPushEngine(pushResult);
+			const onConflict = vi
+				.fn()
+				.mockResolvedValue([
+					{ path: "file.md", resolution: "merged", mergedContent: "merged text" },
+				]);
+
+			const { engine } = createEngine({
+				pullEngine,
+				pushEngine,
+				vault,
+				state,
+				conflictStrategy: "ask",
+				onConflict,
+			});
+
+			const result = await engine.sync();
+
+			expect(result.conflicts).toHaveLength(1);
+			expect(result.resolvedCount).toBe(1);
+
+			// Merged content should be written to vault
+			expect(vault.writeFile).toHaveBeenCalledWith("file.md", "merged text");
+
+			// File should be included in push (merged files are pushed)
+			expect(pushEngine.push).toHaveBeenCalledWith(
+				[expect.objectContaining({ path: "file.md", type: "modify" })],
+				expect.any(Object),
+			);
 		});
 
 		it("resolvedCount is set for non-ask strategies", async () => {

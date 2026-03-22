@@ -1,4 +1,10 @@
-import type { ConflictDecision, ConflictInfo, ConflictStrategy, RenameInfo } from "../types";
+import type {
+	ConflictContentProvider,
+	ConflictDecision,
+	ConflictInfo,
+	ConflictStrategy,
+	RenameInfo,
+} from "../types";
 import type { Logger } from "../utils/logger";
 import type { LocalFileInfo } from "./comparator";
 import {
@@ -41,7 +47,10 @@ export interface SyncEngineOptions {
 	logger: Logger;
 	commitOptions: Omit<PushCommitOptions, "message">;
 	conflictStrategy?: ConflictStrategy;
-	onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
+	onConflict?: (
+		conflicts: ConflictInfo[],
+		contentProvider: ConflictContentProvider,
+	) => Promise<ConflictDecision[]>;
 	excludePatterns?: readonly string[];
 }
 
@@ -53,7 +62,10 @@ export class SyncEngine {
 	private readonly logger: Logger;
 	private readonly commitOptions: Omit<PushCommitOptions, "message">;
 	private readonly conflictStrategy: ConflictStrategy;
-	private readonly onConflict?: (conflicts: ConflictInfo[]) => Promise<ConflictDecision[]>;
+	private readonly onConflict?: (
+		conflicts: ConflictInfo[],
+		contentProvider: ConflictContentProvider,
+	) => Promise<ConflictDecision[]>;
 	private readonly excludePatterns?: readonly string[];
 	private syncPromise: Promise<SyncResult> | null = null;
 
@@ -154,6 +166,18 @@ export class SyncEngine {
 		const remoteWinPaths = new Set(
 			decisions.filter((d) => d.resolution === "remote").map((d) => d.path),
 		);
+		const mergedDecisions = decisions.filter(
+			(d) => d.resolution === "merged" && d.mergedContent !== undefined,
+		);
+		const mergedPaths = new Set(mergedDecisions.map((d) => d.path));
+
+		// Write merged content to vault before pull/push
+		for (const decision of mergedDecisions) {
+			if (decision.mergedContent !== undefined) {
+				await this.vault.writeFile(decision.path, decision.mergedContent);
+				this.logger.info("Merged content written", { path: decision.path });
+			}
+		}
 
 		// Pull skips: all conflict paths EXCEPT those resolved as remote-wins
 		const pullSkipPaths = new Set([...conflictPaths].filter((p) => !remoteWinPaths.has(p)));
@@ -164,10 +188,10 @@ export class SyncEngine {
 			remoteRenames,
 		);
 
-		// Push includes conflict paths only if resolved as local-wins
+		// Push includes: local-wins + merged (merged files need to be pushed)
 		const safePushChanges = localChanges.filter((c) => {
 			if (!conflictPaths.has(c.path)) return true;
-			return localWinPaths.has(c.path);
+			return localWinPaths.has(c.path) || mergedPaths.has(c.path);
 		});
 
 		let push: PushResult | null = null;
@@ -209,7 +233,12 @@ export class SyncEngine {
 			case "ask":
 				if (this.onConflict) {
 					try {
-						return await this.onConflict(conflicts);
+						const contentProvider: ConflictContentProvider = {
+							getLocalContent: (path) => this.vault.readFile(path),
+							getRemoteContent: (path) =>
+								this.pullEngine.getRemoteFileContent(this.commitOptions.branch, path),
+						};
+						return await this.onConflict(conflicts, contentProvider);
 					} catch (error: unknown) {
 						const message = error instanceof Error ? error.message : String(error);
 						this.logger.warn("Conflict callback failed, falling back to skip", {
