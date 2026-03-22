@@ -122,6 +122,7 @@ function createMockGitHubClient(
 				size: file.size,
 			});
 		}),
+		compareCommits: vi.fn().mockRejectedValue(new Error("Not implemented in mock")),
 	} as unknown as GitHubClient;
 }
 
@@ -327,7 +328,7 @@ describe("Sync integration", () => {
 			// But local content hash differs from cache, so push detects modify.
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
+					lastRemoteHeadSha: "0000000000000000000000000000000000000001",
 					lastSyncedAt: 1000,
 					cache: {
 						"doc.md": {
@@ -423,7 +424,7 @@ describe("Sync integration", () => {
 			// Simulate prior sync: file was synced before, now both sides changed
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
+					lastRemoteHeadSha: "0000000000000000000000000000000000000001",
 					lastSyncedAt: 1000,
 					cache: {
 						"conflict.md": {
@@ -467,7 +468,7 @@ describe("Sync integration", () => {
 			// conflict.md was synced before; both sides now have changes
 			storage.data = {
 				syncState: {
-					lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
+					lastRemoteHeadSha: "0000000000000000000000000000000000000001",
 					lastSyncedAt: 1000,
 					cache: {
 						"conflict.md": {
@@ -504,7 +505,7 @@ describe("Sync integration", () => {
 	describe("conflict resolution strategies", () => {
 		const conflictCache = {
 			syncState: {
-				lastRemoteHeadSha: "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33",
+				lastRemoteHeadSha: "0000000000000000000000000000000000000001",
 				lastSyncedAt: 1000,
 				cache: {
 					"conflict.md": {
@@ -969,6 +970,57 @@ describe("Sync integration", () => {
 				expect.arrayContaining([{ path: "fail.md", error: "connection reset" }]),
 			);
 			expect(vault.files.get("ok.md")).toBe("ok content");
+		});
+	});
+
+	describe("incremental pull via Compare API", () => {
+		it("pulls incrementally when compareCommits returns ahead status", async () => {
+			const { engine, vault, client, storage, state } = createIntegrationSetup({
+				remoteFiles: [
+					{ path: "existing.md", sha: "sha-existing", content: "existing", size: 8 },
+					{ path: "new-remote.md", sha: "sha-new", content: "new remote file", size: 15 },
+				],
+			});
+
+			// Pre-populate state: simulate a previous sync with known head
+			const prevHead = "1100220033004400550066007700880099001100";
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: prevHead,
+					lastSyncedAt: 1000,
+					cache: {
+						"existing.md": {
+							remoteSha: "sha-existing",
+							localContentHash: "hash-8",
+							lastSyncedAt: 1000,
+							size: 8,
+							isBinary: false,
+						},
+					},
+				},
+			};
+
+			// Mock compareCommits to return "ahead" with the new file
+			const currentHead = "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33";
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 1,
+				files: [{ filename: "new-remote.md", status: "added", sha: "sha-new" }],
+				headSha: currentHead,
+			});
+
+			// Provide existing.md in vault so it's not pushed
+			vault.files.set("existing.md", "existing");
+
+			const result = await engine.sync();
+
+			// Should have used compareCommits (incremental path)
+			expect(client.compareCommits).toHaveBeenCalledWith(prevHead, currentHead);
+			// New file should be pulled
+			expect(result.pull.created).toContain("new-remote.md");
+			expect(vault.files.get("new-remote.md")).toBe("new remote file");
+			// Head OID should be updated
+			expect(state.getHeadOid()).toBe(currentHead);
 		});
 	});
 });

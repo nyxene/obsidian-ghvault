@@ -480,6 +480,116 @@ describe("GitHubClient", () => {
 		});
 	});
 
+	describe("compareCommits", () => {
+		it("returns compare result with files", async () => {
+			mockResponse({
+				status: "ahead",
+				ahead_by: 2,
+				files: [
+					{ filename: "notes/a.md", status: "modified", sha: "sha1" },
+					{ filename: "notes/b.md", status: "added", sha: "sha2" },
+					{ filename: "old.md", status: "removed", sha: "sha3" },
+				],
+				commits: [{ sha: "commit1" }, { sha: "commit2" }],
+			});
+			const result = await createClient().compareCommits("base-sha", "head-sha");
+			expect(result.status).toBe("ahead");
+			expect(result.aheadBy).toBe(2);
+			expect(result.files).toHaveLength(3);
+			expect(result.files[0]).toEqual({ filename: "notes/a.md", status: "modified", sha: "sha1" });
+			expect(result.headSha).toBe("commit2");
+		});
+
+		it("maps renamed files with previousFilename", async () => {
+			mockResponse({
+				status: "ahead",
+				ahead_by: 1,
+				files: [
+					{
+						filename: "new-name.md",
+						status: "renamed",
+						sha: "sha1",
+						previous_filename: "old-name.md",
+					},
+				],
+				commits: [{ sha: "c1" }],
+			});
+			const result = await createClient().compareCommits("base", "head");
+			expect(result.files[0].previousFilename).toBe("old-name.md");
+		});
+
+		it("returns empty files for identical status", async () => {
+			mockResponse({
+				status: "identical",
+				ahead_by: 0,
+				files: [],
+				commits: [],
+			});
+			const result = await createClient().compareCommits("same", "same");
+			expect(result.status).toBe("identical");
+			expect(result.files).toHaveLength(0);
+		});
+
+		it("returns diverged status", async () => {
+			mockResponse({
+				status: "diverged",
+				ahead_by: 5,
+				files: [{ filename: "x.md", status: "modified", sha: "s" }],
+				commits: [{ sha: "c" }],
+			});
+			const result = await createClient().compareCommits("a", "b");
+			expect(result.status).toBe("diverged");
+		});
+
+		it("filters out unknown file statuses", async () => {
+			mockResponse({
+				status: "ahead",
+				ahead_by: 1,
+				files: [
+					{ filename: "a.md", status: "modified", sha: "s1" },
+					{ filename: "b.md", status: "unchanged", sha: "s2" },
+				],
+				commits: [{ sha: "c" }],
+			});
+			const result = await createClient().compareCommits("a", "b");
+			expect(result.files).toHaveLength(1);
+		});
+
+		it("throws on invalid compare status", async () => {
+			mockResponse({
+				status: "unknown-status",
+				ahead_by: 0,
+				files: [],
+				commits: [],
+			});
+			await expect(createClient().compareCommits("a", "b")).rejects.toThrow(
+				"Invalid compare status",
+			);
+		});
+
+		it("falls back headSha to head param when commits array is empty", async () => {
+			mockResponse({
+				status: "ahead",
+				ahead_by: 1,
+				files: [{ filename: "a.md", status: "added", sha: "sha1" }],
+				commits: [],
+			});
+			const result = await createClient().compareCommits("base-sha", "head-sha");
+			expect(result.headSha).toBe("head-sha");
+		});
+
+		it("returns empty files array when files field is undefined", async () => {
+			mockResponse({
+				status: "behind",
+				ahead_by: 0,
+				commits: [{ sha: "c1" }],
+			});
+			const result = await createClient().compareCommits("base", "head");
+			expect(result.files).toEqual([]);
+			expect(result.headSha).toBe("c1");
+		});
+	});
+
 	describe("ETag conditional requests", () => {
 		beforeEach(() => {
 			mockRequest.mockReset();

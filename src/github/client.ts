@@ -15,6 +15,9 @@ import { requestWithTimeout } from "./request-timeout";
 const BASE_URL = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
+const VALID_COMPARE_STATUSES = new Set(["ahead", "behind", "diverged", "identical"]);
+const VALID_FILE_STATUSES = new Set(["added", "modified", "removed", "renamed"]);
+
 export interface GitHubClientOptions {
 	token: string;
 	owner: string;
@@ -32,6 +35,23 @@ export interface FileContentResponse {
 	content: string;
 	sha: string;
 	size: number;
+}
+
+export type CompareStatus = "ahead" | "behind" | "diverged" | "identical";
+export type CompareFileStatus = "added" | "modified" | "removed" | "renamed";
+
+export interface CompareFile {
+	filename: string;
+	status: CompareFileStatus;
+	sha: string;
+	previousFilename?: string;
+}
+
+export interface CompareResult {
+	status: CompareStatus;
+	aheadBy: number;
+	files: CompareFile[];
+	headSha: string;
 }
 
 interface ETagCacheEntry {
@@ -161,6 +181,42 @@ export class GitHubClient {
 			date: c.commit?.author?.date ?? "",
 			htmlUrl: c.html_url ?? "",
 		}));
+	}
+
+	async compareCommits(base: string, head: string): Promise<CompareResult> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const data = await this.request<{
+			status: string;
+			ahead_by: number;
+			files?: Array<{
+				filename: string;
+				status: string;
+				sha: string;
+				previous_filename?: string;
+			}>;
+			commits: Array<{ sha: string }>;
+		}>(`/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`);
+
+		if (!VALID_COMPARE_STATUSES.has(data.status)) {
+			throw new Error(`Invalid compare status: ${data.status}`);
+		}
+
+		const files: CompareFile[] = (data.files ?? [])
+			.filter((f) => VALID_FILE_STATUSES.has(f.status))
+			.map((f) => ({
+				filename: f.filename,
+				status: f.status as CompareFileStatus,
+				sha: f.sha,
+				...(f.previous_filename ? { previousFilename: f.previous_filename } : {}),
+			}));
+
+		return {
+			status: data.status as CompareStatus,
+			aheadBy: data.ahead_by,
+			files,
+			headSha: data.commits.length > 0 ? data.commits[data.commits.length - 1].sha : head,
+		};
 	}
 
 	async downloadZipball(ref: string): Promise<ArrayBuffer> {
