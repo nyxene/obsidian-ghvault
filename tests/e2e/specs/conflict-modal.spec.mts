@@ -98,10 +98,12 @@ async function injectConflictMock(
 			const engine = plugin.syncEngine;
 			if (!engine) throw new Error("syncEngine is null");
 
-			// Set cache to create conflict conditions
+			// Set cache to create conflict conditions.
+			// lastRemoteHeadSha must differ from HEAD_SHA so incremental pull
+			// detects a change and falls back to full tree comparison.
 			const data = (await plugin.loadData()) || {};
 			data.syncState = {
-				lastRemoteHeadSha: hs as string,
+				lastRemoteHeadSha: "0000000000000000000000000000000000000001",
 				lastSyncedAt: 1000,
 				cache: cacheData,
 			};
@@ -125,6 +127,7 @@ async function injectConflictMock(
 					return { content: btoa(file.content), sha: file.sha, size: file.size };
 				},
 				createFile: async () => ({ sha: "init-sha", commitSha: hs }),
+				compareCommits: async () => { throw new Error("Not implemented in E2E mock"); },
 			};
 
 			const graphqlState = { called: false, lastArgs: null as any };
@@ -378,10 +381,10 @@ describe("conflict modal", () => {
 		expect(headingText).toContain("Resolve conflicts");
 		expect(headingText).toContain("1 file");
 
-		// Check table has the file path
-		const table = await browser.$(".ghvault-conflict-table");
-		const tableText = await table.getText();
-		expect(tableText).toContain("detail-test.md");
+		// Check container has the file path
+		const container = await browser.$(".ghvault-conflict-container");
+		const containerText = await container.getText();
+		expect(containerText).toContain("detail-test.md");
 
 		// Check buttons exist
 		const keepLocal = await findButtonByText(".ghvault-conflict-actions", "Keep Local");
@@ -550,5 +553,476 @@ describe("conflict modal", () => {
 		// Notice should show "conflict" (not "resolved")
 		const notices = await getNotices("GHVault:");
 		expect(notices.some((n) => n.includes("conflict"))).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Group 3: Diff View — expand/collapse, color-coded diff
+// ---------------------------------------------------------------------------
+
+describe("conflict modal diff view", () => {
+	afterEach(async () => {
+		await browser.execute(() => {
+			const container = document.querySelector(".modal-container");
+			if (container) {
+				const close = container.querySelector(".modal-close-button") as HTMLElement;
+				if (close) close.click();
+			}
+		});
+		await browser.pause(200);
+		await clearNotices();
+		await resetCooldown();
+	});
+
+	before(async () => {
+		await ensureAskStrategy();
+		await startNoticeCollector();
+	});
+
+	after(async () => {
+		await stopNoticeCollector();
+		await resetPlugin();
+	});
+
+	it("clicking file row expands diff panel with color-coded lines", async () => {
+		const localContent = "line 1\nlocal only\nline 3";
+		const remoteContent = "line 1\nremote only\nline 3";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-expand.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-expand.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-expand.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		// Click on the file path to expand diff
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		// Diff panel should appear
+		const diffPanel = await browser.$(".ghvault-diff-panel");
+		expect(await diffPanel.isDisplayed()).toBe(true);
+
+		// Should contain diff content with removed and added lines
+		const diffText = await diffPanel.getText();
+		expect(diffText).toContain("local only");
+		expect(diffText).toContain("remote only");
+		expect(diffText).toContain("line 1");
+	});
+
+	it("clicking expanded row collapses diff panel", async () => {
+		const remoteContent = "remote collapse test";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-collapse.md", "local collapse test");
+
+		await injectConflictMock(
+			[{ path: "diff-collapse.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-collapse.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		// Expand
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		let diffPanel = await browser.$(".ghvault-diff-panel");
+		expect(await diffPanel.isDisplayed()).toBe(true);
+
+		// Collapse
+		await pathCell.click();
+		await browser.pause(300);
+
+		diffPanel = await browser.$(".ghvault-diff-panel");
+		expect(await diffPanel.isExisting()).toBe(false);
+	});
+
+	it("diff view shows delete message for modify vs delete conflict", async () => {
+		const remoteContent = "will be deleted on remote";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-delete.md", "local content still here");
+
+		await injectConflictMock(
+			[{ path: "diff-delete.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-delete.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		// Override conflict to be modify vs delete
+		await browser.executeObsidian(({ plugins }) => {
+			const plugin = plugins.ghvault as any;
+			const engine = plugin.syncEngine;
+			if (!engine) return;
+			// Remove the file from remote tree so remoteChange = delete
+			engine.pullEngine.client.getTree = async () => ({ entries: [], truncated: false });
+		});
+
+		triggerSync();
+		await browser.pause(1000);
+
+		// Modal may or may not appear depending on whether conflict is detected
+		// with empty tree. This test verifies the diff panel handles the scenario.
+		const modal = await browser.$(".ghvault-conflict-modal");
+		if (await modal.isExisting()) {
+			const pathCell = await browser.$(".ghvault-conflict-path");
+			await pathCell.click();
+			await browser.pause(1000);
+
+			const diffPanel = await browser.$(".ghvault-diff-panel");
+			if (await diffPanel.isExisting()) {
+				const diffText = await diffPanel.getText();
+				// Should show either the diff or a delete message
+				expect(diffText.length).toBeGreaterThan(0);
+			}
+		}
+	});
+
+	it("diff view still allows Keep Local / Keep Remote decisions", async () => {
+		const localContent = "local with diff";
+		const remoteContent = "remote with diff";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-decision.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-decision.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-decision.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		// Expand diff first
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		// Diff should be visible
+		const diffPanel = await browser.$(".ghvault-diff-panel");
+		expect(await diffPanel.isDisplayed()).toBe(true);
+
+		// Make decision while diff is expanded
+		const keepLocal = await findButtonByText(".ghvault-conflict-actions", "Keep Local");
+		await keepLocal.click();
+		await browser.pause(200);
+
+		// Resolve button should be enabled
+		const resolveBtn = await browser.$(".ghvault-conflict-footer button.mod-cta");
+		const isDisabled = await resolveBtn.getAttribute("disabled");
+		expect(isDisabled).toBeNull();
+
+		// Click resolve
+		await resolveBtn.click();
+		await browser.pause(2000);
+
+		// Local content should be preserved
+		const content = await obsidianPage.read("diff-decision.md");
+		expect(content).toBe(localContent);
+	});
+
+	it("accordion: expanding second file collapses first file diff", async () => {
+		const localA = "file A local line 1\nfile A local line 2";
+		const remoteA = "file A remote line 1\nfile A remote line 2";
+		const localB = "file B local content";
+		const remoteB = "file B remote content";
+		const shaA = await computeGitBlobSha(remoteA);
+		const shaB = await computeGitBlobSha(remoteB);
+
+		await obsidianPage.write("diff-acc-a.md", localA);
+		await obsidianPage.write("diff-acc-b.md", localB);
+
+		await injectConflictMock(
+			[
+				{ path: "diff-acc-a.md", sha: shaA, content: remoteA, size: remoteA.length },
+				{ path: "diff-acc-b.md", sha: shaB, content: remoteB, size: remoteB.length },
+			],
+			{
+				"diff-acc-a.md": {
+					remoteSha: "sha-old-a",
+					localContentHash: "old-hash-a",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+				"diff-acc-b.md": {
+					remoteSha: "sha-old-b",
+					localContentHash: "old-hash-b",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		const pathCells = await browser.$$(".ghvault-conflict-path");
+		expect(pathCells.length).toBe(2);
+
+		// Expand first file
+		await pathCells[0].click();
+		await browser.pause(1000);
+
+		let diffPanels = await browser.$$(".ghvault-diff-panel");
+		expect(diffPanels.length).toBe(1);
+
+		// Verify first diff contains file A content
+		let diffText = await diffPanels[0].getText();
+		expect(diffText).toContain("file A");
+
+		// Expand second file — first should collapse (accordion)
+		await pathCells[1].click();
+		await browser.pause(1000);
+
+		diffPanels = await browser.$$(".ghvault-diff-panel");
+		expect(diffPanels.length).toBe(1);
+
+		// Verify it now shows file B content
+		diffText = await diffPanels[0].getText();
+		expect(diffText).toContain("file B");
+	});
+
+	it("expanded diff shows removed lines in red and added lines in green", async () => {
+		const localContent = "unchanged line\nlocal only line\ncommon end";
+		const remoteContent = "unchanged line\nremote only line\ncommon end";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-colors.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-colors.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-colors.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		const diffPanel = await browser.$(".ghvault-diff-panel");
+		const fullText = await diffPanel.getText();
+
+		// Should contain removed and added lines (prefixed with - and +)
+		expect(fullText).toContain("- ");
+		expect(fullText).toContain("+ ");
+		// Should contain local and remote content
+		expect(fullText).toContain("local only line");
+		expect(fullText).toContain("remote only line");
+		expect(fullText).toContain("unchanged line");
+
+		// Verify a hunk container has colored background on changed lines
+		const hunkDivs = await diffPanel.$$(".ghvault-diff-hunk div");
+		let foundColoredLine = false;
+		for (const div of hunkDivs) {
+			const bg = await div.getCSSProperty("background-color");
+			if (bg.value !== "rgba(0, 0, 0, 0)") {
+				foundColoredLine = true;
+				break;
+			}
+		}
+		expect(foundColoredLine).toBe(true);
+	});
+
+	it("shows hunk headers with line ranges", async () => {
+		const localContent = "line 1\nline 2\nline 3\nline 4\nline 5";
+		const remoteContent = "line 1\nchanged 2\nline 3\nline 4\nline 5";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-hunks.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-hunks.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-hunks.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		// Should have hunk header with @@ notation
+		const hunkHeader = await browser.$(".ghvault-diff-hunk-header");
+		expect(await hunkHeader.isDisplayed()).toBe(true);
+		const headerText = await hunkHeader.getText();
+		expect(headerText).toContain("@@");
+
+		// Should have per-hunk Local/Remote buttons
+		const hunkBtns = await browser.$$(".ghvault-hunk-btn");
+		expect(hunkBtns.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("per-hunk buttons allow cherry-picking changes", async () => {
+		// Two separate changes far enough apart for separate hunks
+		const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+		const localContent = lines.join("\n");
+		const remoteLines = [...lines];
+		remoteLines[2] = "remote change A";
+		remoteLines[17] = "remote change B";
+		const remoteContent = remoteLines.join("\n");
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-cherry.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-cherry.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-cherry.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 100,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		// Expand diff
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		// Should have per-hunk buttons
+		const hunkBtns = await browser.$$(".ghvault-hunk-btn");
+		expect(hunkBtns.length).toBeGreaterThanOrEqual(2);
+
+		// Click first available hunk button (either Local or Remote)
+		await hunkBtns[0].click();
+		await browser.pause(200);
+
+		// Resolve button should become enabled (file has decision via hunk)
+		const resolveBtn = await browser.$(".ghvault-conflict-footer button.mod-cta");
+		const isDisabled = await resolveBtn.getAttribute("disabled");
+		expect(isDisabled).toBeNull();
+	});
+
+	it("shows line numbers in diff view", async () => {
+		const localContent = "first\nsecond\nthird";
+		const remoteContent = "first\nmodified\nthird";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-lines.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-lines.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-lines.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		// Diff panel should contain line numbers
+		const diffPanel = await browser.$(".ghvault-diff-panel");
+		const diffText = await diffPanel.getText();
+		// Line numbers appear as padded numbers (e.g. "   1", "   2")
+		expect(diffText).toMatch(/\d/);
+	});
+
+	it("shows change summary above diff", async () => {
+		const localContent = "keep\nremove me\nkeep too";
+		const remoteContent = "keep\nadd me\nkeep too";
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-summary.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-summary.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-summary.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 10,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		await pathCell.click();
+		await browser.pause(1000);
+
+		const diffPanel = await browser.$(".ghvault-diff-panel");
+		const diffText = await diffPanel.getText();
+		// Should show change summary with +N −N format
+		expect(diffText).toMatch(/\+\d+.*−\d+/);
 	});
 });

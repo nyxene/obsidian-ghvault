@@ -11,6 +11,7 @@ import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
 import type {
 	ChangeType,
+	ConflictContentProvider,
 	ConflictDecision,
 	ConflictInfo,
 	ConflictStrategy,
@@ -182,7 +183,8 @@ export default class GHVaultPlugin extends Plugin {
 			logger,
 			commitOptions: { branch, owner, repo },
 			conflictStrategy: this.settings.conflictStrategy,
-			onConflict: (conflicts) => this.showConflictModal(conflicts),
+			onConflict: (conflicts, contentProvider) =>
+				this.showConflictModal(conflicts, contentProvider),
 			excludePatterns,
 		});
 
@@ -191,8 +193,11 @@ export default class GHVaultPlugin extends Plugin {
 		this.syncState = state;
 	}
 
-	private async showConflictModal(conflicts: ConflictInfo[]): Promise<ConflictDecision[]> {
-		const modal = new ConflictModal(this.app, conflicts);
+	private async showConflictModal(
+		conflicts: ConflictInfo[],
+		contentProvider: ConflictContentProvider,
+	): Promise<ConflictDecision[]> {
+		const modal = new ConflictModal(this.app, conflicts, contentProvider);
 		modal.open();
 		return modal.waitForDecisions();
 	}

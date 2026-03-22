@@ -29,11 +29,12 @@ export const VALID_CONFLICT_STRATEGIES: ReadonlyArray<ConflictStrategy> = [
 	"ask",
 ];
 
-export type ConflictResolution = "local" | "remote";
+export type ConflictResolution = "local" | "remote" | "merged";
 
 export interface ConflictDecision {
 	path: string;
 	resolution: ConflictResolution;
+	mergedContent?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +77,11 @@ export interface ConflictInfo {
 	path: string;
 	localChange: ChangeType;
 	remoteChange: ChangeType;
+}
+
+export interface ConflictContentProvider {
+	getLocalContent(path: string): Promise<string>;
+	getRemoteContent(path: string): Promise<string>;
 }
 
 export interface FileCommitInfo {
