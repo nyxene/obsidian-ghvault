@@ -35,6 +35,7 @@ export default class GHVaultPlugin extends Plugin {
 	private static readonly SYNC_COOLDOWN_MS = 5000;
 	private static readonly PULL_CHECK_BACKOFF_MULTIPLIER = 2;
 	private static readonly PULL_CHECK_BACKOFF_CAP = 8;
+	private static readonly STATUS_REFRESH_INTERVAL_MS = 30_000;
 
 	private settings: GHVaultSettings = { ...DEFAULT_SETTINGS };
 	private syncEngine: SyncEngine | null = null;
@@ -44,6 +45,8 @@ export default class GHVaultPlugin extends Plugin {
 	private statusBarEl: HTMLElement | null = null;
 	private logger: Logger | null = null;
 	private lastSyncAt = 0;
+	private lastSuccessfulSyncAt = 0;
+	private statusRefreshInterval: ReturnType<typeof setInterval> | null = null;
 	private changeQueue: ChangeQueue | null = null;
 	private eventRefs: EventRef[] = [];
 	private pullCheckTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -107,6 +110,7 @@ export default class GHVaultPlugin extends Plugin {
 
 	async onunload(): Promise<void> {
 		this.teardownAutoSync();
+		this.clearStatusRefresh();
 		this.syncEngine = null;
 		this.githubClient = null;
 		this.rateLimiter = null;
@@ -275,6 +279,7 @@ export default class GHVaultPlugin extends Plugin {
 				new Notice(`GHVault: Synced — ${parts.join(", ")}`);
 			}
 
+			this.lastSuccessfulSyncAt = Date.now();
 			this.setStatus("idle");
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -288,6 +293,7 @@ export default class GHVaultPlugin extends Plugin {
 
 	private setupAutoSync(): void {
 		this.teardownAutoSync();
+		this.setStatus("idle");
 
 		if (!this.settings.autoSync || !this.syncEngine) return;
 
@@ -448,8 +454,41 @@ export default class GHVaultPlugin extends Plugin {
 	}
 
 	private setStatus(status: string): void {
-		if (this.statusBarEl) {
+		this.clearStatusRefresh();
+
+		if (!this.statusBarEl) return;
+
+		if (status !== "idle") {
 			this.statusBarEl.setText(`GHVault: ${status}`);
+			return;
+		}
+
+		if (this.lastSuccessfulSyncAt === 0) {
+			this.statusBarEl.setText("GHVault: idle");
+			return;
+		}
+
+		if (this.settings.autoSync) {
+			this.statusBarEl.setText(`GHVault: ${formatAbsoluteTime(this.lastSuccessfulSyncAt)}`);
+		} else {
+			this.refreshStatusBar();
+			this.statusRefreshInterval = setInterval(() => {
+				this.refreshStatusBar();
+			}, GHVaultPlugin.STATUS_REFRESH_INTERVAL_MS);
+		}
+	}
+
+	private refreshStatusBar(): void {
+		if (!this.statusBarEl) return;
+		this.statusBarEl.setText(
+			`GHVault: ${formatRelativeTime(this.lastSuccessfulSyncAt, Date.now())}`,
+		);
+	}
+
+	private clearStatusRefresh(): void {
+		if (this.statusRefreshInterval !== null) {
+			clearInterval(this.statusRefreshInterval);
+			this.statusRefreshInterval = null;
 		}
 	}
 
@@ -519,4 +558,26 @@ export default class GHVaultPlugin extends Plugin {
 
 export function sanitizeErrorForUI(message: string): string {
 	return message.replace(SECRET_PATTERN, "[REDACTED]");
+}
+
+export function formatRelativeTime(timestampMs: number, nowMs: number): string {
+	const diffSec = Math.floor((nowMs - timestampMs) / 1000);
+
+	if (diffSec < 60) return "synced just now";
+
+	const diffMin = Math.floor(diffSec / 60);
+	if (diffMin < 60) return `synced ${diffMin} min ago`;
+
+	const diffHr = Math.floor(diffMin / 60);
+	if (diffHr < 24) return `synced ${diffHr} hr ago`;
+
+	const diffDay = Math.floor(diffHr / 24);
+	return `synced ${diffDay} d ago`;
+}
+
+export function formatAbsoluteTime(timestampMs: number): string {
+	const date = new Date(timestampMs);
+	const hours = String(date.getHours()).padStart(2, "0");
+	const minutes = String(date.getMinutes()).padStart(2, "0");
+	return `synced ${hours}:${minutes}`;
 }

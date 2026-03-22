@@ -213,32 +213,29 @@ async function injectSlowMock(delayMs: number): Promise<void> {
 }
 
 async function injectErrorMock(errorMessage: string): Promise<void> {
-	await browser.executeObsidian(
-		({ plugins }, msg) => {
-			const plugin = plugins.ghvault as any;
-			const engine = plugin.syncEngine;
-			if (!engine) throw new Error("syncEngine is null");
+	await browser.executeObsidian(({ plugins }, msg) => {
+		const plugin = plugins.ghvault as any;
+		const engine = plugin.syncEngine;
+		if (!engine) throw new Error("syncEngine is null");
 
-			engine.pullEngine.client = {
-				getRef: async () => {
-					throw new Error(msg as string);
-				},
-				getCommit: async () => {
-					throw new Error(msg as string);
-				},
-				getTree: async () => {
-					throw new Error(msg as string);
-				},
-				getFileContent: async () => {
-					throw new Error(msg as string);
-				},
-				createFile: async () => {
-					throw new Error(msg as string);
-				},
-			};
-		},
-		errorMessage,
-	);
+		engine.pullEngine.client = {
+			getRef: async () => {
+				throw new Error(msg as string);
+			},
+			getCommit: async () => {
+				throw new Error(msg as string);
+			},
+			getTree: async () => {
+				throw new Error(msg as string);
+			},
+			getFileContent: async () => {
+				throw new Error(msg as string);
+			},
+			createFile: async () => {
+				throw new Error(msg as string);
+			},
+		};
+	}, errorMessage);
 }
 
 async function injectMockWithFiles(
@@ -333,7 +330,8 @@ describe("status bar", () => {
 		);
 
 		const afterText = await getStatusBarText();
-		expect(afterText).toBe("GHVault: idle");
+		// After sync completes, status shows "synced ..." (relative or absolute time)
+		expect(afterText).toMatch(/^GHVault: synced /);
 	});
 
 	it("shows 'GHVault: error' after failed sync", async () => {
@@ -364,6 +362,25 @@ describe("status bar", () => {
 
 		const text = await getStatusBarText();
 		expect(text).toBe("GHVault: error");
+	});
+
+	it("shows 'synced' time after successful sync (manual mode)", async () => {
+		// Restore working mocks after error test
+		await injectEmptyMocks();
+
+		triggerSync();
+
+		await browser.waitUntil(
+			async () => {
+				const t = await getStatusBarText();
+				return t !== "GHVault: error" && t !== "GHVault: syncing...";
+			},
+			{ timeout: 10000, interval: 300, timeoutMsg: "Sync did not complete" },
+		);
+
+		const finalText = await getStatusBarText();
+		// Manual mode (autoSync=false by default) → "synced just now" or "synced N min ago"
+		expect(finalText).toMatch(/^GHVault: synced (just now|\d+ min ago)$/);
 	});
 });
 
@@ -397,7 +414,9 @@ describe("ribbon icon & command", () => {
 		// Vault may have files (Welcome.md) → notice is "Synced" or "Already up to date"
 		const notices = await getNotices("GHVault:");
 		expect(notices.length).toBeGreaterThan(0);
-		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(true);
+		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(
+			true,
+		);
 	});
 
 	it("command triggers sync", async () => {
@@ -408,7 +427,9 @@ describe("ribbon icon & command", () => {
 
 		const notices = await getNotices("GHVault:");
 		expect(notices.length).toBeGreaterThan(0);
-		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(true);
+		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(
+			true,
+		);
 	});
 
 	it("successful sync shows pull/push counts in notice", async () => {
@@ -511,9 +532,7 @@ describe("notice content", () => {
 
 	it("error notice redacts token from message", async () => {
 		// Token must be 20+ chars after prefix to match SECRET_PATTERN
-		await injectErrorMock(
-			"Auth failed with token ghp_abcdefghijklmnopqrstuvwxyz12345 and more",
-		);
+		await injectErrorMock("Auth failed with token ghp_abcdefghijklmnopqrstuvwxyz12345 and more");
 
 		await triggerSync();
 		await browser.pause(500);
@@ -534,9 +553,9 @@ describe("notice content", () => {
 		// Vault may have files → "Synced" or "Already up to date"
 		const notices = await getNotices("GHVault:");
 		expect(notices.length).toBeGreaterThan(0);
-		expect(
-			notices.some((n) => n.includes("Synced") || n.includes("Already up to date")),
-		).toBe(true);
+		expect(notices.some((n) => n.includes("Synced") || n.includes("Already up to date"))).toBe(
+			true,
+		);
 	});
 });
 
