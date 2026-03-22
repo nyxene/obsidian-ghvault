@@ -1,4 +1,4 @@
-import type { GitHubClient } from "../github/client";
+import type { CompareFile, GitHubClient } from "../github/client";
 import type { FileChange, GitHubRef, RenameInfo, SHACacheEntry } from "../types";
 import { GitHubEmptyRepoError, GitHubNotFoundError } from "../types";
 import { hasBinaryContent, toSafeArrayBuffer } from "../utils/binary";
@@ -56,24 +56,232 @@ export class PullEngine {
 		this.excludePatterns = options.excludePatterns;
 	}
 
+	/**
+	 * Shared mutable state between getRemoteChanges() and pull().
+	 *
+	 * getRemoteChanges() fetches remote data and caches it here so that
+	 * the subsequent pull() call can reuse it without re-fetching.
+	 * This two-step design exists because SyncEngine needs to inspect
+	 * remote changes (for conflict detection, rename detection) before
+	 * committing to a pull. Fields are consumed and reset by pull().
+	 */
 	private lastMappedTree: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
 	private lastRawTree: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
 	private lastRefSha = "";
+	private lastIncremental = false;
+	private lastCompareFiles: CompareFile[] = [];
+	private lastCompareChanges: FileChange[] = [];
+	private lastCompareRepoPathMap = new Map<string, string>();
+
+	/**
+	 * GitHub Compare API returns at most 300 files. When the response
+	 * contains 300 entries, additional changes may be truncated silently
+	 * (the API provides no explicit truncation flag). Using strict `< 300`
+	 * ensures we fall back to the full tree when the limit is hit.
+	 */
+	private static readonly COMPARE_FILES_LIMIT = 300;
 
 	getLastMappedTree(): Readonly<Awaited<ReturnType<GitHubClient["getTree"]>>["entries"]> {
 		return this.lastMappedTree;
 	}
 
 	async getRemoteChanges(branch: string): Promise<FileChange[]> {
-		const { refSha, treeEntries } = await this.fetchRefAndTree(branch);
+		const localHead = this.state.getHeadOid();
+
+		// Try incremental path via Compare API when we have a known base commit
+		if (localHead) {
+			const ref = await this.client.getRef(branch);
+			this.lastRefSha = ref.sha;
+
+			if (ref.sha === localHead) {
+				this.lastIncremental = true;
+				this.lastCompareFiles = [];
+				this.lastCompareChanges = [];
+				this.lastCompareRepoPathMap = new Map();
+				this.lastRawTree = [];
+				this.lastMappedTree = [];
+				return [];
+			}
+
+			try {
+				const compare = await this.client.compareCommits(localHead, ref.sha);
+
+				if (
+					compare.status !== "diverged" &&
+					compare.files.length < PullEngine.COMPARE_FILES_LIMIT
+				) {
+					this.logger.info("Incremental pull via Compare API", {
+						aheadBy: compare.aheadBy,
+						files: compare.files.length,
+					});
+					this.lastIncremental = true;
+					this.lastCompareFiles = compare.files;
+					this.lastRawTree = [];
+					// Build mapped tree + changes + repoPathMap in a single pass
+					const { entries, changes, repoPathMap } = this.processCompareFiles(compare.files);
+					this.lastMappedTree = entries;
+					this.lastCompareChanges = changes;
+					this.lastCompareRepoPathMap = repoPathMap;
+					return changes;
+				}
+
+				this.logger.warn("Compare fallback to full tree", {
+					status: compare.status,
+					files: compare.files.length,
+				});
+			} catch (error: unknown) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.logger.warn("Compare API failed, falling back to full tree", {
+					error: message,
+				});
+			}
+		}
+
+		// Full tree path (first sync or fallback)
+		return this.getRemoteChangesFull(branch);
+	}
+
+	private async getRemoteChangesFull(branch: string): Promise<FileChange[]> {
+		const { refSha, treeEntries } = this.lastRefSha
+			? { refSha: this.lastRefSha, treeEntries: await this.fetchTreeForRef(this.lastRefSha) }
+			: await this.fetchRefAndTree(branch);
 		this.lastRefSha = refSha;
 		this.lastRawTree = treeEntries;
+		this.lastIncremental = false;
+		this.lastCompareFiles = [];
+		this.lastCompareChanges = [];
+		this.lastCompareRepoPathMap = new Map();
 
 		const mappedEntries = this.mapTreeToVaultPaths(treeEntries);
 		this.lastMappedTree = mappedEntries;
 
 		const cache = this.state.getAllSHAs();
 		return computeRemoteChanges(mappedEntries, cache, this.excludePatterns);
+	}
+
+	/**
+	 * Apply remote renames: rename local file + update SHA cache.
+	 * Returns the set of paths handled by rename (both old and new).
+	 */
+	private async processRemoteRenames(
+		remoteRenames: readonly RenameInfo[] | undefined,
+		mappedEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"],
+		result: PullResult,
+	): Promise<Set<string>> {
+		const renamePaths = new Set<string>();
+		if (!remoteRenames || remoteRenames.length === 0) return renamePaths;
+
+		for (const rename of remoteRenames) {
+			try {
+				const oldCache = this.state.getSHA(rename.oldPath);
+				await this.vault.renameFile(rename.oldPath, rename.newPath);
+				this.state.deleteSHA(rename.oldPath);
+				if (oldCache) {
+					const newTreeEntry = mappedEntries.find((e) => e.path === rename.newPath);
+					this.state.setSHA(rename.newPath, {
+						...oldCache,
+						remoteSha: newTreeEntry?.sha ?? oldCache.remoteSha,
+						lastSyncedAt: Date.now(),
+					});
+				}
+				result.renamed.push(rename);
+				renamePaths.add(rename.oldPath);
+				renamePaths.add(rename.newPath);
+				this.logger.info("Remote rename applied", {
+					from: rename.oldPath,
+					to: rename.newPath,
+				});
+			} catch (error: unknown) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.logger.error("Remote rename failed", {
+					from: rename.oldPath,
+					to: rename.newPath,
+					error: message,
+				});
+				result.errors.push({ path: rename.oldPath, error: message });
+			}
+		}
+
+		return renamePaths;
+	}
+
+	/**
+	 * Process compare files in a single pass to build the mapped tree
+	 * (for detectRemoteRenames), the file changes list, and the repo path map
+	 * (for pullPerFile). All three outputs share a single toVaultPath() call
+	 * per file, avoiding redundant iteration.
+	 */
+	private processCompareFiles(files: CompareFile[]): {
+		entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"];
+		changes: FileChange[];
+		repoPathMap: Map<string, string>;
+	} {
+		const entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+		const changes: FileChange[] = [];
+		const repoPathMap = new Map<string, string>();
+
+		for (const file of files) {
+			const vaultPath = toVaultPath(file.filename, this.syncFolder);
+			if (vaultPath === null) continue;
+
+			// Build repo path map (vault path → repo path for API calls)
+			repoPathMap.set(vaultPath, file.filename);
+
+			// Build mapped tree entry (for detectRemoteRenames)
+			if (file.status !== "removed") {
+				entries.push({
+					path: vaultPath,
+					sha: file.sha,
+					mode: "100644",
+					type: "blob",
+				});
+			}
+
+			// Build change entry
+			if (isExcluded(vaultPath, this.excludePatterns)) continue;
+
+			switch (file.status) {
+				case "added":
+					changes.push({ path: vaultPath, type: "create" });
+					break;
+				case "modified":
+					changes.push({ path: vaultPath, type: "modify" });
+					break;
+				case "removed":
+					changes.push({ path: vaultPath, type: "delete" });
+					break;
+				case "renamed":
+					if (file.previousFilename) {
+						const oldVaultPath = toVaultPath(file.previousFilename, this.syncFolder);
+						if (oldVaultPath !== null) {
+							changes.push({ path: oldVaultPath, type: "delete" });
+						}
+					}
+					changes.push({ path: vaultPath, type: "create" });
+					break;
+			}
+		}
+
+		return { entries, changes, repoPathMap };
+	}
+
+	private async fetchTreeForRef(
+		refSha: string,
+	): Promise<Awaited<ReturnType<GitHubClient["getTree"]>>["entries"]> {
+		const commit = await this.client.getCommit(refSha);
+		try {
+			const tree = await this.client.getTree(commit.treeSha, true);
+			if (tree.truncated) {
+				this.logger.warn("Tree response truncated — some files may be missed");
+			}
+			return tree.entries;
+		} catch (error: unknown) {
+			if (error instanceof GitHubNotFoundError) {
+				this.logger.info("Tree is empty (no files in repo)");
+				return [];
+			}
+			throw error;
+		}
 	}
 
 	private async fetchRefAndTree(branch: string): Promise<{
@@ -117,6 +325,11 @@ export class PullEngine {
 		const result: PullResult = { created: [], modified: [], deleted: [], renamed: [], errors: [] };
 
 		this.logger.info("Pull started", { branch });
+
+		// Incremental mode: use Compare data, skip full tree
+		if (this.lastIncremental) {
+			return this.pullIncremental(branch, skipPaths, remoteRenames, result);
+		}
 
 		// Reuse ref+tree from getRemoteChanges if available, otherwise fetch fresh
 		let refSha: string;
@@ -177,40 +390,7 @@ export class PullEngine {
 
 		this.logger.info("Remote changes detected", { count: changes.length });
 
-		// Handle remote renames: rename local file + update cache (no download)
-		const renamePaths = new Set<string>();
-		if (remoteRenames && remoteRenames.length > 0) {
-			for (const rename of remoteRenames) {
-				try {
-					const oldCache = this.state.getSHA(rename.oldPath);
-					await this.vault.renameFile(rename.oldPath, rename.newPath);
-					this.state.deleteSHA(rename.oldPath);
-					if (oldCache) {
-						const newTreeEntry = mappedEntries.find((e) => e.path === rename.newPath);
-						this.state.setSHA(rename.newPath, {
-							...oldCache,
-							remoteSha: newTreeEntry?.sha ?? oldCache.remoteSha,
-							lastSyncedAt: Date.now(),
-						});
-					}
-					result.renamed.push(rename);
-					renamePaths.add(rename.oldPath);
-					renamePaths.add(rename.newPath);
-					this.logger.info("Remote rename applied", {
-						from: rename.oldPath,
-						to: rename.newPath,
-					});
-				} catch (error: unknown) {
-					const message = error instanceof Error ? error.message : String(error);
-					this.logger.error("Remote rename failed", {
-						from: rename.oldPath,
-						to: rename.newPath,
-						error: message,
-					});
-					result.errors.push({ path: rename.oldPath, error: message });
-				}
-			}
-		}
+		const renamePaths = await this.processRemoteRenames(remoteRenames, mappedEntries, result);
 
 		// Separate deletes (no HTTP needed) from downloads (create/modify)
 		const downloads: FileChange[] = [];
@@ -275,6 +455,99 @@ export class PullEngine {
 		await this.state.save();
 
 		this.logger.info("Pull complete", {
+			created: result.created.length,
+			modified: result.modified.length,
+			deleted: result.deleted.length,
+			errors: result.errors.length,
+		});
+
+		return result;
+	}
+
+	private async pullIncremental(
+		branch: string,
+		skipPaths: ReadonlySet<string> | undefined,
+		remoteRenames: readonly RenameInfo[] | undefined,
+		result: PullResult,
+	): Promise<PullResult> {
+		const refSha = this.lastRefSha;
+		const compareFiles = this.lastCompareFiles;
+		const mappedEntries = this.lastMappedTree;
+		const cachedChanges = this.lastCompareChanges;
+		const repoPathMap = this.lastCompareRepoPathMap;
+		this.lastRefSha = "";
+		this.lastCompareFiles = [];
+		this.lastCompareChanges = [];
+		this.lastCompareRepoPathMap = new Map();
+		this.lastIncremental = false;
+
+		if (compareFiles.length === 0) {
+			this.logger.info("Pull complete — no remote changes (incremental)");
+			this.state.setHeadOid(refSha);
+			this.state.setLastSyncedAt(Date.now());
+			await this.state.save();
+			return result;
+		}
+
+		const renamePaths = await this.processRemoteRenames(remoteRenames, mappedEntries, result);
+
+		// Reuse changes and repoPathMap cached by getRemoteChanges()
+		const filtered = skipPaths?.size
+			? cachedChanges.filter((c) => !skipPaths.has(c.path))
+			: cachedChanges;
+		const afterRenames = renamePaths.size
+			? filtered.filter((c) => !renamePaths.has(c.path))
+			: filtered;
+
+		if (afterRenames.length === 0) {
+			this.logger.info("Pull complete — all changes skipped (incremental)");
+			this.state.setHeadOid(refSha);
+			this.state.setLastSyncedAt(Date.now());
+			await this.state.save();
+			return result;
+		}
+
+		this.logger.info("Incremental pull", { count: afterRenames.length });
+
+		// Separate downloads from deletes
+		const downloads: FileChange[] = [];
+		const deletes: FileChange[] = [];
+		for (const change of afterRenames) {
+			if (!isSafePath(change.path)) {
+				this.logger.warn("Skipping unsafe path from remote", { path: change.path });
+				result.errors.push({ path: change.path, error: "Unsafe path rejected" });
+				continue;
+			}
+			if (change.type === "delete") {
+				deletes.push(change);
+			} else {
+				downloads.push(change);
+			}
+		}
+
+		// Download per-file (incremental = typically few files, no ZIP).
+		// Note: MAX_FILE_SIZE check is skipped here because Compare API does not
+		// return file sizes. pullPerFile handles download errors gracefully.
+		await this.pullPerFile(branch, downloads, repoPathMap, result);
+
+		// Process deletes
+		for (const change of deletes) {
+			try {
+				await this.vault.deleteFile(change.path);
+				this.state.deleteSHA(change.path);
+				result.deleted.push(change.path);
+			} catch (error: unknown) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.logger.error("Pull failed for file", { path: change.path, error: message });
+				result.errors.push({ path: change.path, error: message });
+			}
+		}
+
+		this.state.setHeadOid(refSha);
+		this.state.setLastSyncedAt(Date.now());
+		await this.state.save();
+
+		this.logger.info("Incremental pull complete", {
 			created: result.created.length,
 			modified: result.modified.length,
 			deleted: result.deleted.length,
