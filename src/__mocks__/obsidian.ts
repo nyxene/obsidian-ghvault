@@ -111,7 +111,34 @@ export class Plugin {
 	addStatusBarItem(): unknown {
 		return createFakeEl("div");
 	}
+	registerView(_type: string, _creator: unknown): void {}
 }
+
+export class ItemView {
+	app: unknown;
+	leaf: unknown;
+	contentEl = createFakeEl("div");
+	containerEl = createFakeEl("div");
+	constructor(leaf: unknown) {
+		this.leaf = leaf;
+	}
+	getViewType(): string {
+		return "";
+	}
+	getDisplayText(): string {
+		return "";
+	}
+	getIcon(): string {
+		return "";
+	}
+	addAction(_icon: string, _title: string, _cb: unknown): unknown {
+		return createFakeEl("div");
+	}
+	async onOpen(): Promise<void> {}
+	async onClose(): Promise<void> {}
+}
+
+export function setIcon(_el: unknown, _iconId: string): void {}
 
 export class PluginSettingTab {
 	app: unknown;

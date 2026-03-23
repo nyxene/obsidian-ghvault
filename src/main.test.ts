@@ -101,12 +101,14 @@ vi.mock("./sync/push", () => ({
 const mockStateClear = vi.fn();
 const mockStateSave = vi.fn().mockResolvedValue(undefined);
 const mockGetHeadOid = vi.fn().mockReturnValue("");
+const mockGetAllSHAs = vi.fn().mockReturnValue({});
 
 vi.mock("./sync/state", () => ({
 	SyncStateManager: class MockSyncStateManager {
 		clear = mockStateClear;
 		save = mockStateSave;
 		getHeadOid = mockGetHeadOid;
+		getAllSHAs = mockGetAllSHAs;
 	},
 }));
 
@@ -130,6 +132,7 @@ const mockChangeQueuePause = vi.fn();
 const mockChangeQueueResume = vi.fn();
 const mockChangeQueueDestroy = vi.fn();
 const mockChangeQueuePush = vi.fn();
+const mockChangeQueueGetPending = vi.fn().mockReturnValue(new Map());
 
 vi.mock("./sync/change-queue", () => ({
 	ChangeQueue: class MockChangeQueue {
@@ -145,6 +148,7 @@ vi.mock("./sync/change-queue", () => ({
 		resume = mockChangeQueueResume;
 		destroy = mockChangeQueueDestroy;
 		push = mockChangeQueuePush;
+		getPending = mockChangeQueueGetPending;
 	},
 }));
 
@@ -221,6 +225,8 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	const plugin = new PluginClass();
 
 	const vault = new Vault();
+	(vault as AnyPlugin).getFiles = vi.fn().mockReturnValue([]);
+	(vault as AnyPlugin).getFileByPath = vi.fn().mockReturnValue(null);
 	plugin.loadData = vi
 		.fn()
 		.mockImplementation(() =>
@@ -228,7 +234,13 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 		);
 	plugin.saveData = vi.fn().mockResolvedValue(undefined);
 	const metadataCache = { getCache: vi.fn().mockReturnValue(null) };
-	plugin.app = { vault, metadataCache } as AnyPlugin;
+	const workspace = {
+		getLeavesOfType: vi.fn().mockReturnValue([]),
+		getRightLeaf: vi.fn().mockReturnValue(null),
+		revealLeaf: vi.fn(),
+		openLinkText: vi.fn(),
+	};
+	plugin.app = { vault, metadataCache, workspace } as AnyPlugin;
 
 	const statusBarEl = createMockElement();
 	let ribbonCallback: () => void = () => {};
@@ -241,8 +253,8 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 			return createMockElement();
 		});
 
-	plugin.addCommand = vi.fn().mockImplementation((cmd: { callback?: () => void }) => {
-		if (cmd.callback) {
+	plugin.addCommand = vi.fn().mockImplementation((cmd: { callback?: () => void; id?: string }) => {
+		if (cmd.callback && cmd.id === "ghvault-sync") {
 			commandCallback = cmd.callback;
 		}
 		return cmd;
@@ -250,6 +262,7 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 
 	plugin.addStatusBarItem = vi.fn().mockReturnValue(statusBarEl);
 	plugin.addSettingTab = vi.fn();
+	plugin.registerView = vi.fn();
 
 	await plugin.onload();
 
@@ -358,6 +371,7 @@ describe("GHVaultPlugin", () => {
 		mockStateClear.mockClear();
 		mockStateSave.mockClear();
 		mockGetHeadOid.mockReset().mockReturnValue("");
+		mockGetAllSHAs.mockReset().mockReturnValue({});
 		capturedSettingCallbacks = {};
 		capturedChangeQueueOnReady = null;
 		capturedChangeQueueOnPersist = null;
@@ -365,6 +379,7 @@ describe("GHVaultPlugin", () => {
 		mockChangeQueueResume.mockClear();
 		mockChangeQueuePush.mockClear();
 		mockChangeQueueDestroy.mockClear();
+		mockChangeQueueGetPending.mockReset().mockReturnValue(new Map());
 	});
 
 	describe("loadSettings", () => {
@@ -1719,6 +1734,61 @@ describe("GHVaultPlugin", () => {
 				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
 				.mock.calls.map((c: unknown[]) => c[0]) as string[];
 			expect(autoCalls.some((c) => /^GHVault: synced \d{2}:\d{2}$/.test(c))).toBe(true);
+		});
+	});
+
+	describe("registerView and toggle command", () => {
+		it("registerView is called with correct view type", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(plugin.registerView).toHaveBeenCalledTimes(1);
+			const [viewType] = vi.mocked(plugin.registerView).mock.calls[0];
+			expect(viewType).toBe("ghvault-sync-status");
+		});
+
+		it("toggle command is registered with correct id", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const toggleCmd = calls.find(
+				(c: [{ id: string; name: string }]) => c[0].id === "ghvault-toggle-sync-status",
+			);
+			expect(toggleCmd).toBeDefined();
+			expect(toggleCmd?.[0].name).toBe("Toggle sync status panel");
+		});
+	});
+
+	describe("refreshSyncStatusPanel", () => {
+		it("is called after successful sync (workspace.getLeavesOfType is called)", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockClear();
+
+			await plugin.runSync();
+
+			// refreshSyncStatusPanel calls getLeavesOfType with the view type
+			expect(workspace.getLeavesOfType).toHaveBeenCalledWith("ghvault-sync-status");
+		});
+
+		it("does not crash when no leaves exist", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockReturnValue([]);
+
+			// Should not throw
+			await plugin.runSync();
+		});
+
+		it("calls view.refresh with data when leaf exists", async () => {
+			const mockRefresh = vi.fn();
+			const mockView = { refresh: mockRefresh };
+			const mockLeaf = { view: mockView };
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockReturnValue([mockLeaf]);
+
+			await plugin.runSync();
+
+			expect(mockRefresh).toHaveBeenCalled();
 		});
 	});
 });
