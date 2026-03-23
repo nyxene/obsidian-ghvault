@@ -84,6 +84,10 @@ export class ChangeQueue {
 		return this.pending.size;
 	}
 
+	getPending(): ReadonlyMap<string, ChangeType> {
+		return this.pending;
+	}
+
 	private persist(): void {
 		if (!this.onPersist) return;
 		if (this.persistScheduled) return;

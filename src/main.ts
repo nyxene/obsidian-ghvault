@@ -1,4 +1,4 @@
-import { type EventRef, Notice, Plugin, TFile } from "obsidian";
+import { type EventRef, Notice, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
 import { GitHubClient } from "./github/client";
 import { GitHubGraphQL } from "./github/graphql";
 import { RateLimiter } from "./github/rate-limit";
@@ -26,8 +26,9 @@ import {
 } from "./types";
 import { ConflictModal } from "./ui/conflict-modal";
 import { FileHistoryModal } from "./ui/file-history-modal";
+import { buildSyncStatusData, SYNC_STATUS_VIEW_TYPE, SyncStatusView } from "./ui/sync-status-view";
 import { Logger } from "./utils/logger";
-import { getEffectiveExcludePatterns, isSafePath, toRepoPath } from "./utils/path";
+import { getEffectiveExcludePatterns, isExcluded, isSafePath, toRepoPath } from "./utils/path";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
 const VALID_CHANGE_TYPES = new Set<string>(["create", "modify", "delete"]);
@@ -49,6 +50,7 @@ export default class GHVaultPlugin extends Plugin {
 	private lastSuccessfulSyncAt = 0;
 	private statusRefreshInterval: ReturnType<typeof setInterval> | null = null;
 	private changeQueue: ChangeQueue | null = null;
+	private lastConflicts: ConflictInfo[] = [];
 	private eventRefs: EventRef[] = [];
 	private pullCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 	private pullCheckCurrentInterval = 0;
@@ -98,6 +100,28 @@ export default class GHVaultPlugin extends Plugin {
 					this.showFileHistory(file.path);
 				}
 				return true;
+			},
+		});
+
+		this.registerView(SYNC_STATUS_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
+			const view = new SyncStatusView(leaf);
+			view.setCallbacks(
+				() => this.runSync(),
+				(path) => {
+					const file = this.app.vault.getFileByPath(path);
+					if (file) {
+						this.app.workspace.openLinkText(path, "", false);
+					}
+				},
+			);
+			return view;
+		});
+
+		this.addCommand({
+			id: "ghvault-toggle-sync-status",
+			name: "Toggle sync status panel",
+			callback: () => {
+				this.toggleSyncStatusPanel();
 			},
 		});
 
@@ -287,7 +311,9 @@ export default class GHVaultPlugin extends Plugin {
 			}
 
 			this.lastSuccessfulSyncAt = Date.now();
+			this.lastConflicts = result.conflicts;
 			this.setStatus("idle");
+			this.refreshSyncStatusPanel();
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logger?.error("Sync failed", { error: message });
@@ -498,6 +524,57 @@ export default class GHVaultPlugin extends Plugin {
 			clearInterval(this.statusRefreshInterval);
 			this.statusRefreshInterval = null;
 		}
+	}
+
+	private async toggleSyncStatusPanel(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(SYNC_STATUS_VIEW_TYPE);
+		if (existing.length > 0) {
+			existing[0].detach();
+		} else {
+			const leaf = this.app.workspace.getRightLeaf(false);
+			if (leaf) {
+				await leaf.setViewState({ type: SYNC_STATUS_VIEW_TYPE, active: true });
+				this.app.workspace.revealLeaf(leaf);
+				this.refreshSyncStatusPanel();
+			}
+		}
+	}
+
+	private refreshSyncStatusPanel(): void {
+		const leaves = this.app.workspace.getLeavesOfType(SYNC_STATUS_VIEW_TYPE);
+		if (leaves.length === 0) return;
+
+		const view = leaves[0].view as SyncStatusView;
+		if (!this.syncState || !this.syncEngine) {
+			view.refresh({
+				synced: [],
+				pending: [],
+				conflicts: [],
+				untracked: [],
+				lastSyncedAt: 0,
+			});
+			return;
+		}
+
+		const cache = this.syncState.getAllSHAs();
+		const vaultFiles = this.app.vault.getFiles().map((f) => f.path);
+		const pending = this.changeQueue?.getPending() ?? new Map();
+		const excludePatterns = getEffectiveExcludePatterns(this.settings.excludePatterns);
+		const excludedPaths = new Set(
+			vaultFiles.filter(
+				(p) => isExcluded(p, excludePatterns) || this.isSyncExcludedByFrontmatter(p),
+			),
+		);
+
+		const data = buildSyncStatusData(
+			cache,
+			vaultFiles,
+			pending,
+			this.lastConflicts,
+			this.lastSuccessfulSyncAt,
+			excludedPaths,
+		);
+		view.refresh(data);
 	}
 
 	private isSyncExcludedByFrontmatter(path: string): boolean {

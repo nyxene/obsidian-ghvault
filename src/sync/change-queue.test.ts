@@ -427,6 +427,54 @@ describe("ChangeQueue", () => {
 		});
 	});
 
+	describe("getPending", () => {
+		it("returns empty map initially", () => {
+			const onReady = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady });
+
+			const pending = queue.getPending();
+			expect(pending.size).toBe(0);
+		});
+
+		it("returns correct map after push operations", () => {
+			const onReady = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady });
+
+			queue.push("a.md", "create");
+			queue.push("b.md", "modify");
+			queue.push("c.md", "delete");
+
+			const pending = queue.getPending();
+			expect(pending.size).toBe(3);
+			expect(pending.get("a.md")).toBe("create");
+			expect(pending.get("b.md")).toBe("modify");
+			expect(pending.get("c.md")).toBe("delete");
+		});
+
+		it("reflects merged state after multiple pushes to same path", () => {
+			const onReady = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady });
+
+			queue.push("note.md", "create");
+			queue.push("note.md", "modify");
+
+			const pending = queue.getPending();
+			expect(pending.size).toBe(1);
+			expect(pending.get("note.md")).toBe("create");
+		});
+
+		it("returns empty map after flush", () => {
+			const onReady = vi.fn();
+			const queue = new ChangeQueue({ debounceMs: 1000, onReady });
+
+			queue.push("note.md", "create");
+			queue.flush();
+
+			const pending = queue.getPending();
+			expect(pending.size).toBe(0);
+		});
+	});
+
 	describe("frontmatter sync exclusion", () => {
 		it("skips files where isSyncExcluded returns true", () => {
 			const onReady = vi.fn();
