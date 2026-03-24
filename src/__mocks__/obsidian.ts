@@ -112,6 +112,7 @@ export class Plugin {
 		return createFakeEl("div");
 	}
 	registerView(_type: string, _creator: unknown): void {}
+	registerEvent(_event: unknown): void {}
 }
 
 export class ItemView {

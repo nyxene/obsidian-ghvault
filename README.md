@@ -51,6 +51,8 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Selective sync** — `.obsidian/`, `.trash/`, and log files are never synced, plus custom exclude patterns (e.g. `drafts/**`, `*.tmp`) and per-file opt-out via `ghvault-sync: false` in frontmatter
 - **Incremental sync** — uses GitHub Compare API for efficient change detection (only fetches delta, not full tree)
 - **ETag caching** — conditional requests on polling (304 Not Modified = free, no rate limit cost)
+- **Share as Gist** — share any note as a GitHub Gist (public or secret) with one click. Manage shared gists: copy URL, update content, or delete. Ribbon button + context menu + command palette.
+- **Sync status panel** — dedicated sidebar panel showing per-file sync status: conflicts, pending changes, untracked and synced files
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
 - **Crash recovery** — pending changes are persisted to disk and restored after restart
 
@@ -79,9 +81,11 @@ GHVault is not yet in the Obsidian Community Plugins directory. Install manually
 Go to [GitHub Settings → Fine-grained tokens](https://github.com/settings/tokens?type=beta) and create a token with:
 
 - **Repository access**: select the repository you want to sync with
-- **Permissions**:
+- **Repository permissions**:
   - Contents: Read and Write
   - Metadata: Read-only
+- **Account permissions** *(optional)*:
+  - Gists: Read and Write — required for "Share as Gist" feature
 
 > Fine-grained tokens are recommended over classic tokens — they limit access to specific repos and permissions.
 
@@ -120,6 +124,18 @@ The status bar shows the current state:
 When using the "Ask" strategy, a modal appears listing each conflicted file. Click on a file to expand an inline diff view with color-coded changes (red = removed, green = added) and line numbers. Choose "Keep Local" or "Keep Remote" for the entire file, or use per-hunk "Local"/"Remote" buttons to cherry-pick changes from each side:
 
 ![Conflict resolution modal](docs/screenshots/conflict-modal.png)
+
+### Share as Gist
+
+Share any markdown note as a GitHub Gist. Access via ribbon icon, right-click context menu, or command palette:
+
+- **Ribbon**: click the share icon (↗) in the left sidebar
+- **Context menu**: right-click a `.md` file → "Share as Gist"
+- **Command palette**: `Ctrl/Cmd+P` → "GHVault: Share note as Gist"
+
+Choose public or secret visibility, add a description, and the URL is copied to your clipboard. Manage all shared gists via the list icon (☰) in the ribbon — copy URL, update content, or delete.
+
+> Requires `Gists: Read and Write` in your PAT's **Account permissions**. If missing, you'll see a helpful message.
 
 ### File history
 
@@ -253,7 +269,9 @@ src/
     conflict-modal.ts      # Conflict resolution modal with diff view
     diff.ts                # Line-based diff algorithm (LCS)
     file-history-modal.ts  # File commit history modal
-    status-bar.ts          # Status bar widget
+    gist-modal.ts          # Share as Gist creation/update modal
+    gist-manager-modal.ts  # Manage shared gists modal
+    sync-status-view.ts    # Sidebar panel with per-file sync status
   utils/
     base64.ts              # Base64 encode/decode
     concurrency.ts         # Controlled parallel execution

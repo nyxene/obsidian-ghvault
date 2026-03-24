@@ -16,6 +16,7 @@ import type {
 	ConflictInfo,
 	ConflictStrategy,
 	GHVaultSettings,
+	GistRecord,
 	LogLevel,
 } from "./types";
 import {
@@ -26,6 +27,8 @@ import {
 } from "./types";
 import { ConflictModal } from "./ui/conflict-modal";
 import { FileHistoryModal } from "./ui/file-history-modal";
+import { GistManagerModal } from "./ui/gist-manager-modal";
+import { GistModal } from "./ui/gist-modal";
 import { buildSyncStatusData, SYNC_STATUS_VIEW_TYPE, SyncStatusView } from "./ui/sync-status-view";
 import { Logger } from "./utils/logger";
 import { getEffectiveExcludePatterns, isExcluded, isSafePath, toRepoPath } from "./utils/path";
@@ -51,6 +54,7 @@ export default class GHVaultPlugin extends Plugin {
 	private statusRefreshInterval: ReturnType<typeof setInterval> | null = null;
 	private changeQueue: ChangeQueue | null = null;
 	private lastConflicts: ConflictInfo[] = [];
+	private gistRegistry: Record<string, GistRecord> = {};
 	private eventRefs: EventRef[] = [];
 	private pullCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 	private pullCheckCurrentInterval = 0;
@@ -80,6 +84,27 @@ export default class GHVaultPlugin extends Plugin {
 
 		this.addRibbonIcon("refresh-cw", "GHVault: Sync now", () => {
 			this.runSync();
+		});
+
+		this.addRibbonIcon("share", "GHVault: Share as Gist", () => {
+			const file = this.app.workspace.getActiveFile();
+			if (!file || file.extension !== "md") {
+				new Notice("GHVault: Open a markdown file to share as Gist");
+				return;
+			}
+			if (!this.githubClient) {
+				new Notice("GHVault: Configure settings first (token, owner, repo)");
+				return;
+			}
+			this.shareAsGist(file.path);
+		});
+
+		this.addRibbonIcon("list", "GHVault: Manage shared gists", () => {
+			if (!this.githubClient) {
+				new Notice("GHVault: Configure settings first (token, owner, repo)");
+				return;
+			}
+			this.openGistManager();
 		});
 
 		this.addCommand({
@@ -125,9 +150,50 @@ export default class GHVaultPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "ghvault-share-gist",
+			name: "Share note as Gist",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || !this.githubClient || file.extension !== "md") return false;
+				if (!checking) {
+					this.shareAsGist(file.path);
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "ghvault-manage-gists",
+			name: "Manage shared gists",
+			checkCallback: (checking) => {
+				if (!this.githubClient) return false;
+				if (!checking) {
+					this.openGistManager();
+				}
+				return true;
+			},
+		});
+
 		this.statusBarEl = this.addStatusBarItem();
 		this.setStatus("idle");
 
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (file instanceof TFile && file.extension === "md" && this.githubClient) {
+					menu.addItem((item) => {
+						item
+							.setTitle("Share as Gist")
+							.setIcon("share")
+							.onClick(() => {
+								this.shareAsGist(file.path);
+							});
+					});
+				}
+			}),
+		);
+
+		await this.loadGistRegistry();
 		this.rebuildSyncEngine();
 		this.setupAutoSync();
 		await this.restorePendingChanges();
@@ -575,6 +641,81 @@ export default class GHVaultPlugin extends Plugin {
 			excludedPaths,
 		);
 		view.refresh(data);
+	}
+
+	private async shareAsGist(vaultPath: string): Promise<void> {
+		if (!this.githubClient) {
+			new Notice("GHVault: Configure settings first");
+			return;
+		}
+
+		const file = this.app.vault.getFileByPath(vaultPath);
+		if (!file) {
+			new Notice("GHVault: File not found");
+			return;
+		}
+
+		if (file.stat.size > 1024 * 1024) {
+			new Notice("GHVault: File too large for Gist (max 1MB)");
+			return;
+		}
+
+		const content = await this.app.vault.read(file);
+		const fileName = vaultPath.split("/").pop() ?? vaultPath;
+		const existingGist = this.gistRegistry[vaultPath];
+
+		const modal = new GistModal(
+			this.app,
+			vaultPath,
+			fileName,
+			content,
+			this.githubClient,
+			existingGist,
+		);
+		modal.open();
+
+		const result = await modal.waitForResult();
+		if (result) {
+			this.gistRegistry[vaultPath] = result.record;
+			await this.saveGistRegistry();
+		}
+	}
+
+	private openGistManager(): void {
+		if (!this.githubClient) {
+			new Notice("GHVault: Configure settings first");
+			return;
+		}
+
+		const modal = new GistManagerModal(
+			this.app,
+			this.githubClient,
+			this.gistRegistry,
+			async (registry) => {
+				this.gistRegistry = registry;
+				await this.saveGistRegistry();
+			},
+			async (path) => {
+				const file = this.app.vault.getFileByPath(path);
+				if (!file) throw new Error(`File not found: ${path}`);
+				return this.app.vault.read(file);
+			},
+		);
+		modal.open();
+	}
+
+	private async loadGistRegistry(): Promise<void> {
+		const data = await this.loadData();
+		const raw = data?.gistRegistry;
+		if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+			this.gistRegistry = raw as Record<string, GistRecord>;
+		}
+	}
+
+	private async saveGistRegistry(): Promise<void> {
+		const data = (await this.loadData()) || {};
+		data.gistRegistry = this.gistRegistry;
+		await this.saveData(data);
 	}
 
 	private isSyncExcludedByFrontmatter(path: string): boolean {

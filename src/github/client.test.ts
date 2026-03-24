@@ -590,6 +590,190 @@ describe("GitHubClient", () => {
 		});
 	});
 
+	describe("createGist", () => {
+		it("returns id and htmlUrl", async () => {
+			mockResponse({ id: "gist123", html_url: "https://gist.github.com/gist123" });
+			const result = await createClient().createGist({
+				filename: "note.md",
+				content: "# Hello",
+				description: "My note",
+				isPublic: false,
+			});
+			expect(result).toEqual({ id: "gist123", htmlUrl: "https://gist.github.com/gist123" });
+		});
+
+		it("sends correct request body", async () => {
+			mockResponse({ id: "g1", html_url: "https://gist.github.com/g1" });
+			await createClient().createGist({
+				filename: "test.md",
+				content: "content here",
+				description: "desc",
+				isPublic: true,
+			});
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/gists");
+			expect(arg.method).toBe("POST");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.description).toBe("desc");
+			expect(body.public).toBe(true);
+			expect(body.files).toEqual({ "test.md": { content: "content here" } });
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ error: "bad" });
+			await expect(
+				createClient().createGist({
+					filename: "f.md",
+					content: "c",
+					description: "",
+					isPublic: false,
+				}),
+			).rejects.toThrow("Invalid gist response from GitHub API");
+		});
+
+		it("throws GitHubAuthError on 401", async () => {
+			mockError(401);
+			await expect(
+				createClient().createGist({
+					filename: "f.md",
+					content: "c",
+					description: "",
+					isPublic: false,
+				}),
+			).rejects.toThrow(GitHubAuthError);
+		});
+
+		it("throws GitHubRateLimitError when rate limited", async () => {
+			const rateLimiter = new RateLimiter();
+			const futureReset = Math.floor(Date.now() / 1000) + 3600;
+			rateLimiter.updateFromHeaders({
+				"x-ratelimit-limit": "5000",
+				"x-ratelimit-remaining": "0",
+				"x-ratelimit-reset": String(futureReset),
+			});
+			await expect(
+				createClient(rateLimiter).createGist({
+					filename: "f.md",
+					content: "c",
+					description: "",
+					isPublic: false,
+				}),
+			).rejects.toThrow(GitHubRateLimitError);
+		});
+	});
+
+	describe("updateGist", () => {
+		it("returns updated id and htmlUrl", async () => {
+			mockResponse({ id: "gist456", html_url: "https://gist.github.com/gist456" });
+			const result = await createClient().updateGist("gist456", {
+				filename: "note.md",
+				content: "# Updated",
+				description: "Updated desc",
+			});
+			expect(result).toEqual({ id: "gist456", htmlUrl: "https://gist.github.com/gist456" });
+		});
+
+		it("sends PATCH request with correct body", async () => {
+			mockResponse({ id: "g1", html_url: "https://gist.github.com/g1" });
+			await createClient().updateGist("g1", {
+				filename: "file.md",
+				content: "new content",
+				description: "new desc",
+			});
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/gists/g1");
+			expect(arg.method).toBe("PATCH");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.description).toBe("new desc");
+			expect(body.files).toEqual({ "file.md": { content: "new content" } });
+		});
+
+		it("omits description when undefined", async () => {
+			mockResponse({ id: "g1", html_url: "https://gist.github.com/g1" });
+			await createClient().updateGist("g1", {
+				filename: "file.md",
+				content: "content",
+			});
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { body: string };
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body).not.toHaveProperty("description");
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ bad: "shape" });
+			await expect(
+				createClient().updateGist("g1", { filename: "f.md", content: "c" }),
+			).rejects.toThrow("Invalid gist response from GitHub API");
+		});
+	});
+
+	describe("deleteGist", () => {
+		it("succeeds on successful delete", async () => {
+			mockRequest.mockResolvedValue({
+				json: null,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 204,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(createClient().deleteGist("gist789")).resolves.toBeUndefined();
+		});
+
+		it("silently handles 404 (already deleted)", async () => {
+			mockRequest.mockRejectedValue({ status: 404 });
+			await expect(createClient().deleteGist("gone-gist")).resolves.toBeUndefined();
+		});
+
+		it("throws GitHubAuthError on 401", async () => {
+			mockRequest.mockRejectedValue({ status: 401 });
+			await expect(createClient().deleteGist("g1")).rejects.toThrow(GitHubAuthError);
+		});
+
+		it("throws when rate limited before request", async () => {
+			const rateLimiter = new RateLimiter();
+			const futureReset = Math.floor(Date.now() / 1000) + 3600;
+			rateLimiter.updateFromHeaders({
+				"x-ratelimit-limit": "5000",
+				"x-ratelimit-remaining": "0",
+				"x-ratelimit-reset": String(futureReset),
+			});
+			await expect(createClient(rateLimiter).deleteGist("g1")).rejects.toThrow(
+				GitHubRateLimitError,
+			);
+		});
+
+		it("updates rate limiter headers on success", async () => {
+			mockRequest.mockResolvedValue({
+				json: null,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4900",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 204,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const rateLimiter = new RateLimiter();
+			const client = createClient(rateLimiter);
+			await client.deleteGist("gist-to-delete");
+
+			expect(rateLimiter.getState("rest")?.remaining).toBe(4900);
+		});
+	});
+
 	describe("ETag conditional requests", () => {
 		beforeEach(() => {
 			mockRequest.mockReset();

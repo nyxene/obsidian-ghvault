@@ -950,3 +950,122 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Add a file that contains null bytes (e.g., compiled binary, .zip archive)
 2. Sync
 **Expected:** File detected as binary, pushed with correct encoding, pullable
+
+---
+
+## Group H: Share as Gist
+
+### TC-GIST-001: Share note as secret gist via ribbon
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Configured plugin with Gists (Read/Write) account permission on PAT
+**Steps:**
+1. Open a .md file in the editor
+2. Click the "Share as Gist" ribbon icon (share icon)
+3. Leave visibility as "Secret" (default)
+4. Optionally edit description
+5. Click "Share"
+**Expected:** Notice "Gist URL copied to clipboard". URL is a valid gist.github.com link. Gist is secret (unlisted).
+
+### TC-GIST-002: Share note as public gist
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Same as TC-GIST-001
+**Steps:**
+1. Open a .md file
+2. Click ribbon "Share as Gist"
+3. Select "Public" radio button
+4. Click "Share"
+**Expected:** Gist created as public. URL copied to clipboard. Gist visible at gist.github.com.
+
+### TC-GIST-003: Share via context menu (right-click)
+**Priority:** P1
+**Platform:** Desktop
+**Steps:**
+1. Right-click on a .md file in the file explorer
+2. Select "Share as Gist"
+**Expected:** Gist modal opens with correct file name and path.
+
+### TC-GIST-004: Share via command palette
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open a .md file
+2. Open command palette (Ctrl/Cmd+P)
+3. Search "GHVault: Share note as Gist"
+4. Execute command
+**Expected:** Gist modal opens.
+
+### TC-GIST-005: Share not available for non-md files
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open a non-markdown file (image, PDF, etc.) or have no file open
+2. Click ribbon "Share as Gist"
+**Expected:** Notice "Open a markdown file to share as Gist". No modal opens.
+
+### TC-GIST-006: Share with missing gist scope
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** PAT without Gists permission
+**Steps:**
+1. Open a .md file
+2. Share as Gist
+**Expected:** Notice "Token missing gist scope. Add 'gists' permission to your PAT." No gist created.
+
+### TC-GIST-007: Share file >1MB
+**Priority:** P2
+**Platform:** Both
+**Steps:**
+1. Create a .md file larger than 1MB
+2. Try to share as Gist
+**Expected:** Notice "File too large for Gist (max 1MB)". No modal opens.
+
+### TC-GIST-008: Manage gists — view shared gists
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** At least one gist previously shared
+**Steps:**
+1. Click ribbon "Manage shared gists" (list icon)
+**Expected:** Manager modal opens showing all shared gists with file paths, descriptions, visibility badges (🔒/🌐), and action buttons.
+
+### TC-GIST-009: Manage gists — copy URL
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open Manage shared gists
+2. Click "Copy URL" on an entry
+**Expected:** URL copied to clipboard. Notice confirms.
+
+### TC-GIST-010: Manage gists — update content
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Edit the local file that was previously shared
+2. Open Manage shared gists
+3. Click "Update" on the entry
+**Expected:** Gist content updated on GitHub. Notice "Gist updated". Timestamp refreshes in modal.
+
+### TC-GIST-011: Manage gists — delete gist
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open Manage shared gists
+2. Click "Delete" on an entry
+**Expected:** Gist deleted from GitHub. Entry removed from manager. Notice "Gist deleted".
+
+### TC-GIST-012: Manage gists — empty state
+**Priority:** P2
+**Platform:** Both
+**Steps:**
+1. Open Manage shared gists with no gists shared
+**Expected:** Shows "No gists shared yet." message.
+
+### TC-GIST-013: Update existing gist (re-share same file)
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Share a file as Gist
+2. Edit the file
+3. Share the same file again via ribbon/command
+**Expected:** Modal shows "Update Gist" title. Clicking "Update" refreshes the existing gist (same URL), not creates a new one.

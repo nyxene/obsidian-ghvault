@@ -168,7 +168,9 @@ export class GHVaultSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("GitHub token")
-			.setDesc("Personal access token with repo scope")
+			.setDesc(
+				"Fine-grained PAT. Repository permissions: Contents (Read/Write), Metadata (Read). Account permissions: Gists (Read/Write) — optional, for Share as Gist.",
+			)
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
