@@ -126,6 +126,30 @@ vi.mock("./ui/conflict-modal", () => ({
 	},
 }));
 
+const mockGistModalOpen = vi.fn();
+const mockGistModalWaitForResult = vi.fn().mockResolvedValue(null);
+
+vi.mock("./ui/gist-modal", () => ({
+	GistModal: class MockGistModal {
+		open = mockGistModalOpen;
+		waitForResult = mockGistModalWaitForResult;
+	},
+}));
+
+const mockGistManagerModalOpen = vi.fn();
+
+vi.mock("./ui/gist-manager-modal", () => ({
+	GistManagerModal: class MockGistManagerModal {
+		open = mockGistManagerModalOpen;
+	},
+}));
+
+vi.mock("./ui/file-history-modal", () => ({
+	FileHistoryModal: class MockFileHistoryModal {
+		open = vi.fn();
+	},
+}));
+
 let capturedChangeQueueOnReady: (() => void) | null = null;
 let capturedChangeQueueOnPersist: ((pending: Record<string, string>) => void) | null = null;
 const mockChangeQueuePause = vi.fn();
@@ -239,6 +263,7 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 		getRightLeaf: vi.fn().mockReturnValue(null),
 		revealLeaf: vi.fn(),
 		openLinkText: vi.fn(),
+		on: vi.fn().mockReturnValue({ id: 1 }),
 	};
 	plugin.app = { vault, metadataCache, workspace } as AnyPlugin;
 
@@ -248,8 +273,10 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 
 	plugin.addRibbonIcon = vi
 		.fn()
-		.mockImplementation((_icon: string, _title: string, cb: () => void) => {
-			ribbonCallback = cb;
+		.mockImplementation((icon: string, _title: string, cb: () => void) => {
+			if (icon === "refresh-cw") {
+				ribbonCallback = cb;
+			}
 			return createMockElement();
 		});
 
@@ -263,6 +290,7 @@ async function loadPlugin(loadDataResult: unknown = null): Promise<{
 	plugin.addStatusBarItem = vi.fn().mockReturnValue(statusBarEl);
 	plugin.addSettingTab = vi.fn();
 	plugin.registerView = vi.fn();
+	plugin.registerEvent = vi.fn();
 
 	await plugin.onload();
 
@@ -373,6 +401,9 @@ describe("GHVaultPlugin", () => {
 		mockGetHeadOid.mockReset().mockReturnValue("");
 		mockGetAllSHAs.mockReset().mockReturnValue({});
 		capturedSettingCallbacks = {};
+		mockGistModalOpen.mockClear();
+		mockGistModalWaitForResult.mockReset().mockResolvedValue(null);
+		mockGistManagerModalOpen.mockClear();
 		capturedChangeQueueOnReady = null;
 		capturedChangeQueueOnPersist = null;
 		mockChangeQueuePause.mockClear();
@@ -1789,6 +1820,241 @@ describe("GHVaultPlugin", () => {
 			await plugin.runSync();
 
 			expect(mockRefresh).toHaveBeenCalled();
+		});
+	});
+
+	describe("gist commands", () => {
+		it("share-gist command is registered with correct id and name", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const gistCmd = calls.find(
+				(c: [{ id: string; name: string }]) => c[0].id === "ghvault-share-gist",
+			);
+			expect(gistCmd).toBeDefined();
+			expect(gistCmd?.[0].name).toBe("Share note as Gist");
+			expect(gistCmd?.[0].checkCallback).toBeDefined();
+		});
+
+		it("manage-gists command is registered with correct id and name", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const manageCmd = calls.find(
+				(c: [{ id: string; name: string }]) => c[0].id === "ghvault-manage-gists",
+			);
+			expect(manageCmd).toBeDefined();
+			expect(manageCmd?.[0].name).toBe("Manage shared gists");
+			expect(manageCmd?.[0].checkCallback).toBeDefined();
+		});
+	});
+
+	describe("gist registry", () => {
+		it("loadGistRegistry loads from saved data", async () => {
+			const gistRegistry = {
+				"notes/a.md": {
+					gistId: "g1",
+					htmlUrl: "https://gist.github.com/g1",
+					isPublic: false,
+					vaultPath: "notes/a.md",
+					description: "test",
+					createdAt: 1000,
+					updatedAt: 2000,
+				},
+			};
+			const { plugin } = await loadPlugin({
+				...CONFIGURED_SETTINGS,
+				gistRegistry,
+			});
+			expect(plugin.gistRegistry).toEqual(gistRegistry);
+		});
+
+		it("loadGistRegistry defaults to empty when no data", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(plugin.gistRegistry).toEqual({});
+		});
+
+		it("loadGistRegistry ignores non-object gistRegistry", async () => {
+			const { plugin } = await loadPlugin({
+				...CONFIGURED_SETTINGS,
+				gistRegistry: "not-an-object",
+			});
+			expect(plugin.gistRegistry).toEqual({});
+		});
+
+		it("loadGistRegistry ignores array gistRegistry", async () => {
+			const { plugin } = await loadPlugin({
+				...CONFIGURED_SETTINGS,
+				gistRegistry: ["not", "an", "object"],
+			});
+			expect(plugin.gistRegistry).toEqual({});
+		});
+
+		it("saveGistRegistry persists to storage", async () => {
+			const gistRegistry = {
+				"notes/a.md": {
+					gistId: "g1",
+					htmlUrl: "https://gist.github.com/g1",
+					isPublic: false,
+					vaultPath: "notes/a.md",
+					description: "test",
+					createdAt: 1000,
+					updatedAt: 2000,
+				},
+			};
+			const { plugin } = await loadPlugin({
+				...CONFIGURED_SETTINGS,
+				gistRegistry,
+			});
+
+			plugin.gistRegistry["notes/b.md"] = {
+				gistId: "g2",
+				htmlUrl: "https://gist.github.com/g2",
+				isPublic: true,
+				vaultPath: "notes/b.md",
+				description: "second",
+				createdAt: 3000,
+				updatedAt: 4000,
+			};
+			await plugin.saveGistRegistry();
+
+			const savedData = vi.mocked(plugin.saveData).mock.calls.at(-1)?.[0];
+			expect(savedData?.gistRegistry).toEqual(plugin.gistRegistry);
+		});
+	});
+
+	describe("shareAsGist behavior", () => {
+		it("returns early with Notice when no githubClient", async () => {
+			const { plugin } = await loadPlugin(null);
+			noticeLog.length = 0;
+
+			await (plugin as AnyPlugin).shareAsGist("notes/test.md");
+
+			expect(noticeLog.some((n: NoticeRecord) => n.message.includes("Configure settings"))).toBe(
+				true,
+			);
+			expect(mockGistModalOpen).not.toHaveBeenCalled();
+		});
+
+		it("returns early with Notice when file not found", async () => {
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vi.mocked(vault.getFileByPath).mockReturnValue(null);
+			noticeLog.length = 0;
+
+			await (plugin as AnyPlugin).shareAsGist("nonexistent.md");
+
+			expect(noticeLog.some((n: NoticeRecord) => n.message.includes("File not found"))).toBe(true);
+			expect(mockGistModalOpen).not.toHaveBeenCalled();
+		});
+
+		it("returns early with Notice when file >1MB", async () => {
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			const { TFile } = await import("obsidian");
+			const bigFile = new TFile();
+			bigFile.path = "big.md";
+			bigFile.stat = { size: 1024 * 1024 + 1, ctime: 0, mtime: 0 };
+			vi.mocked(vault.getFileByPath).mockReturnValue(bigFile);
+			noticeLog.length = 0;
+
+			await (plugin as AnyPlugin).shareAsGist("big.md");
+
+			expect(noticeLog.some((n: NoticeRecord) => n.message.includes("too large for Gist"))).toBe(
+				true,
+			);
+			expect(mockGistModalOpen).not.toHaveBeenCalled();
+		});
+
+		it("opens GistModal with correct params for new gist", async () => {
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "notes/hello.md";
+			file.stat = { size: 100, ctime: 0, mtime: 0 };
+			vi.mocked(vault.getFileByPath).mockReturnValue(file);
+			vault.read = vi.fn().mockResolvedValue("# Hello World");
+			noticeLog.length = 0;
+
+			await (plugin as AnyPlugin).shareAsGist("notes/hello.md");
+
+			expect(mockGistModalOpen).toHaveBeenCalledTimes(1);
+			expect(mockGistModalWaitForResult).toHaveBeenCalledTimes(1);
+		});
+
+		it("saves result to gist registry when modal returns record", async () => {
+			const gistRecord = {
+				gistId: "g-new",
+				htmlUrl: "https://gist.github.com/g-new",
+				isPublic: false,
+				vaultPath: "notes/saved.md",
+				description: "saved gist",
+				createdAt: 5000,
+				updatedAt: 5000,
+			};
+			mockGistModalWaitForResult.mockResolvedValue({ record: gistRecord });
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "notes/saved.md";
+			file.stat = { size: 50, ctime: 0, mtime: 0 };
+			vi.mocked(vault.getFileByPath).mockReturnValue(file);
+			vault.read = vi.fn().mockResolvedValue("content");
+
+			await (plugin as AnyPlugin).shareAsGist("notes/saved.md");
+
+			expect(plugin.gistRegistry["notes/saved.md"]).toEqual(gistRecord);
+			// saveGistRegistry should have been called
+			expect(plugin.saveData).toHaveBeenCalled();
+		});
+	});
+
+	describe("openGistManager behavior", () => {
+		it("opens GistManagerModal", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			(plugin as AnyPlugin).openGistManager();
+
+			expect(mockGistManagerModalOpen).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("gist checkCallback behavior", () => {
+		function getCommand(
+			plugin: AnyPlugin,
+			id: string,
+		): { checkCallback: (checking: boolean) => boolean | void } | undefined {
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const cmd = calls.find((c: [{ id: string }]) => c[0].id === id);
+			return cmd?.[0] as { checkCallback: (checking: boolean) => boolean | void } | undefined;
+		}
+
+		it("share-gist checkCallback returns false for non-.md files", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "image.png";
+			file.extension = "png";
+			plugin.app.workspace.getActiveFile = vi.fn().mockReturnValue(file);
+
+			const cmd = getCommand(plugin, "ghvault-share-gist");
+			expect(cmd?.checkCallback(true)).toBe(false);
+		});
+
+		it("share-gist checkCallback returns false when no githubClient", async () => {
+			const { plugin } = await loadPlugin(null);
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "note.md";
+			file.extension = "md";
+			plugin.app.workspace.getActiveFile = vi.fn().mockReturnValue(file);
+
+			const cmd = getCommand(plugin, "ghvault-share-gist");
+			expect(cmd?.checkCallback(true)).toBe(false);
+		});
+
+		it("manage-gists checkCallback returns false when no githubClient", async () => {
+			const { plugin } = await loadPlugin(null);
+
+			const cmd = getCommand(plugin, "ghvault-manage-gists");
+			expect(cmd?.checkCallback(true)).toBe(false);
 		});
 	});
 });

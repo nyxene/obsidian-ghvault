@@ -236,6 +236,66 @@ export class GitHubClient {
 		return response.arrayBuffer;
 	}
 
+	async createGist(options: {
+		filename: string;
+		content: string;
+		description: string;
+		isPublic: boolean;
+	}): Promise<{ id: string; htmlUrl: string }> {
+		const data = await this.post<{ id: string; html_url: string }>("/gists", {
+			description: options.description,
+			public: options.isPublic,
+			files: { [options.filename]: { content: options.content } },
+		});
+		if (typeof data.id !== "string" || typeof data.html_url !== "string") {
+			throw new Error("Invalid gist response from GitHub API");
+		}
+		return { id: data.id, htmlUrl: data.html_url };
+	}
+
+	async updateGist(
+		gistId: string,
+		options: { filename: string; content: string; description?: string },
+	): Promise<{ id: string; htmlUrl: string }> {
+		const body: Record<string, unknown> = {
+			files: { [options.filename]: { content: options.content } },
+		};
+		if (options.description !== undefined) {
+			body.description = options.description;
+		}
+		const data = await this.post<{ id: string; html_url: string }>(
+			`/gists/${encodeURIComponent(gistId)}`,
+			body,
+			"PATCH",
+		);
+		if (typeof data.id !== "string" || typeof data.html_url !== "string") {
+			throw new Error("Invalid gist response from GitHub API");
+		}
+		return { id: data.id, htmlUrl: data.html_url };
+	}
+
+	async deleteGist(gistId: string): Promise<void> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+		const url = `${BASE_URL}/gists/${encodeURIComponent(gistId)}`;
+		this.logger.debug("GitHub REST deleteGist", { gistId });
+		try {
+			const response = await requestWithTimeout({
+				url,
+				method: "DELETE",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+			});
+			this.rateLimiter.updateFromHeaders(response.headers);
+		} catch (error: unknown) {
+			const status = (error as { status?: number }).status;
+			if (status === 404) return; // Already deleted
+			throw this.handleRequestError(error, `/gists/${gistId}`);
+		}
+	}
+
 	async createBlob(base64Content: string): Promise<string> {
 		const owner = encodeURIComponent(this.owner);
 		const repo = encodeURIComponent(this.repo);

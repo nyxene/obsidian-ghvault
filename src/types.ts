@@ -84,6 +84,16 @@ export interface ConflictContentProvider {
 	getRemoteContent(path: string): Promise<string>;
 }
 
+export interface GistRecord {
+	gistId: string;
+	htmlUrl: string;
+	isPublic: boolean;
+	vaultPath: string;
+	description: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
 export interface FileCommitInfo {
 	sha: string;
 	message: string;
