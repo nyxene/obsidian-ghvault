@@ -4,7 +4,7 @@ import { GitHubGraphQL } from "./github/graphql";
 import { RateLimiter } from "./github/rate-limit";
 import { GHVaultSettingTab, sanitizeBranch, sanitizeSlug, sanitizeSyncFolder } from "./settings";
 import { ChangeQueue } from "./sync/change-queue";
-import { SyncEngine } from "./sync/engine";
+import { SyncEngine, type SyncResult } from "./sync/engine";
 import { PullEngine } from "./sync/pull";
 import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
@@ -411,6 +411,13 @@ export default class GHVaultPlugin extends Plugin {
 				new Notice(`GHVault: Synced — ${parts.join(", ")}`);
 			}
 
+			if (pushCount > 0 && this.settings.dispatchOnPush && this.settings.dispatchEventType) {
+				this.fireDispatch(result).catch((err: unknown) => {
+					const msg = err instanceof Error ? err.message : String(err);
+					this.logger?.warn("Repository dispatch failed", { error: msg });
+				});
+			}
+
 			this.lastSuccessfulSyncAt = Date.now();
 			this.lastConflicts = result.conflicts;
 			this.setStatus("idle");
@@ -423,6 +430,19 @@ export default class GHVaultPlugin extends Plugin {
 		} finally {
 			this.changeQueue?.resume();
 		}
+	}
+
+	private async fireDispatch(result: SyncResult): Promise<void> {
+		if (!this.githubClient) return;
+		await this.githubClient.triggerDispatch(this.settings.dispatchEventType, {
+			branch: this.settings.branch,
+			pushed: result.push?.pushed ?? [],
+			deleted: result.push?.deleted ?? [],
+			commitOid: result.push?.oid ?? "",
+		});
+		this.logger?.info("Repository dispatch triggered", {
+			eventType: this.settings.dispatchEventType,
+		});
 	}
 
 	private setupAutoSync(): void {
@@ -957,6 +977,14 @@ export default class GHVaultPlugin extends Plugin {
 					typeof raw.excludePatterns === "string"
 						? raw.excludePatterns
 						: DEFAULT_SETTINGS.excludePatterns,
+				dispatchOnPush:
+					typeof raw.dispatchOnPush === "boolean"
+						? raw.dispatchOnPush
+						: DEFAULT_SETTINGS.dispatchOnPush,
+				dispatchEventType:
+					typeof raw.dispatchEventType === "string" && raw.dispatchEventType.trim()
+						? raw.dispatchEventType.trim()
+						: DEFAULT_SETTINGS.dispatchEventType,
 			};
 		}
 	}

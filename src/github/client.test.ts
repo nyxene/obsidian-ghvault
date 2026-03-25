@@ -1191,4 +1191,51 @@ describe("GitHubClient", () => {
 			expect(arg.headers.Accept).toBe("application/octet-stream");
 		});
 	});
+
+	describe("triggerDispatch", () => {
+		it("sends POST to dispatches endpoint with event_type", async () => {
+			mockResponse(null);
+			const client = createClient();
+			await client.triggerDispatch("vault-synced");
+
+			expect(mockRequest).toHaveBeenCalledWith(
+				expect.objectContaining({
+					url: "https://api.github.com/repos/testowner/testrepo/dispatches",
+					method: "POST",
+				}),
+			);
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const body = JSON.parse((lastCall[0] as { body: string }).body);
+			expect(body).toEqual({ event_type: "vault-synced" });
+		});
+
+		it("includes client_payload when provided", async () => {
+			mockResponse(null);
+			const client = createClient();
+			await client.triggerDispatch("vault-synced", {
+				branch: "main",
+				pushed: ["file.md"],
+			});
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const body = JSON.parse((lastCall[0] as { body: string }).body);
+			expect(body).toEqual({
+				event_type: "vault-synced",
+				client_payload: { branch: "main", pushed: ["file.md"] },
+			});
+		});
+
+		it("throws GitHubAuthError on 401", async () => {
+			mockError(401);
+			await expect(createClient().triggerDispatch("test")).rejects.toThrow(GitHubAuthError);
+		});
+
+		it("asserts rate limit before request", async () => {
+			const rateLimiter = new RateLimiter();
+			const spy = vi.spyOn(rateLimiter, "assertCanMakeRequest");
+			mockResponse(null);
+			await createClient(rateLimiter).triggerDispatch("test");
+			expect(spy).toHaveBeenCalledWith("rest");
+		});
+	});
 });

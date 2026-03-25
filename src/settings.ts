@@ -1,7 +1,9 @@
-import { type App, type Plugin, PluginSettingTab, Setting } from "obsidian";
+import { type App, type Plugin, PluginSettingTab, type Setting, SettingGroup } from "obsidian";
 import type { ConflictStrategy, GHVaultSettings, LogLevel } from "./types";
 import { VALID_CONFLICT_STRATEGIES, VALID_LOG_LEVELS } from "./types";
 import { isValidExcludePattern, normalizePath } from "./utils/path";
+
+const GUIDE_BASE = "https://github.com/nyxene/obsidian-ghvault/blob/main/docs/guide";
 
 export function sanitizeSlug(value: string): string {
 	return value.replace(/[^a-zA-Z0-9._-]/g, "");
@@ -166,12 +168,21 @@ export class GHVaultSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass("ghvault-settings");
 
-		new Setting(containerEl)
-			.setName("GitHub token")
-			.setDesc(
-				"Fine-grained PAT. Repository permissions: Contents (Read/Write), Metadata (Read). Account permissions: Gists (Read/Write) — optional, for Share as Gist.",
-			)
-			.addText((text) => {
+		// ── Connection ──────────────────────────────────────────────────
+		const connectionGroup = new SettingGroup(containerEl);
+		connectionGroup.setHeading("Connection");
+
+		connectionGroup.addSetting((setting) => {
+			setting.setName("GitHub token");
+			setting.descEl.createSpan({
+				text: "Fine-grained PAT with Contents (Read/Write) and Metadata (Read) permissions.",
+			});
+			setting.descEl.createEl("br");
+			setting.descEl.createEl("a", {
+				text: "How to create a token",
+				href: `${GUIDE_BASE}/getting-started.md#step-1-create-a-github-token`,
+			});
+			setting.addText((text) => {
 				text.inputEl.type = "password";
 				text
 					.setPlaceholder("ghp_...")
@@ -181,30 +192,13 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						await this.callbacks.onSave(this.settings);
 					});
 			});
-
-		const warning = containerEl.createEl("div", {
-			cls: "ghvault-token-warning",
 		});
-		warning.style.padding = "8px 12px";
-		warning.style.marginTop = "4px";
-		warning.style.marginBottom = "16px";
-		warning.style.borderRadius = "4px";
-		warning.style.backgroundColor = "var(--background-modifier-error-rgb, rgba(255, 0, 0, 0.1))";
-		warning.style.border = "1px solid var(--text-error)";
-		warning.style.color = "var(--text-error)";
-		warning.style.fontSize = "12px";
-		warning.style.lineHeight = "1.4";
-		warning.setText(
-			"Token is stored unencrypted in your vault's plugin data (data.json). " +
-				"Do not sync your vault folder via cloud storage (Dropbox, iCloud, Google Drive) " +
-				"if security is a concern. Use a fine-grained PAT with contents:write scope only on the target repo.",
-		);
 
 		if (this.settings.githubToken) {
-			new Setting(containerEl)
-				.setName("Forget token")
-				.setDesc("Clear the stored token from plugin data")
-				.addButton((button) => {
+			connectionGroup.addSetting((setting) => {
+				setting.setName("Forget token");
+				setting.setDesc("Clear the stored token from plugin data");
+				setting.addButton((button) => {
 					button
 						.setButtonText("Forget")
 						.setWarning()
@@ -214,12 +208,13 @@ export class GHVaultSettingTab extends PluginSettingTab {
 							this.display();
 						});
 				});
+			});
 		}
 
-		new Setting(containerEl)
-			.setName("Repository owner")
-			.setDesc("GitHub username or organization")
-			.addText((text) =>
+		connectionGroup.addSetting((setting) => {
+			setting.setName("Repository owner");
+			setting.setDesc("GitHub username or organization");
+			setting.addText((text) =>
 				text
 					.setPlaceholder("owner")
 					.setValue(this.settings.owner)
@@ -229,11 +224,12 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						await this.callbacks.onSave(this.settings);
 					}),
 			);
+		});
 
-		new Setting(containerEl)
-			.setName("Repository name")
-			.setDesc("Name of the GitHub repository")
-			.addText((text) =>
+		connectionGroup.addSetting((setting) => {
+			setting.setName("Repository name");
+			setting.setDesc("Name of the GitHub repository");
+			setting.addText((text) =>
 				text
 					.setPlaceholder("my-vault")
 					.setValue(this.settings.repo)
@@ -243,11 +239,12 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						await this.callbacks.onSave(this.settings);
 					}),
 			);
+		});
 
-		new Setting(containerEl)
-			.setName("Branch")
-			.setDesc("Branch to sync with")
-			.addText((text) =>
+		connectionGroup.addSetting((setting) => {
+			setting.setName("Branch");
+			setting.setDesc("Branch to sync with");
+			setting.addText((text) =>
 				text
 					.setPlaceholder("main")
 					.setValue(this.settings.branch)
@@ -257,24 +254,28 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						await this.callbacks.onSave(this.settings);
 					}),
 			);
+		});
 
-		const syncFolderSetting = new Setting(containerEl).setName("Sync folder").addText((text) =>
-			text
-				.setPlaceholder("docs/vault")
-				.setValue(this.settings.syncFolder)
-				.onChange(async (value) => {
-					const validation = validateSyncFolder(value);
-					this.settings.syncFolder = validation.sanitized;
-					applyDescStyle(syncFolderSetting, syncFolderDesc(value));
-					await this.callbacks.onSave(this.settings);
-				}),
-		);
-		applyDescStyle(syncFolderSetting, syncFolderDesc(this.settings.syncFolder));
+		connectionGroup.addSetting((setting) => {
+			setting.setName("Sync folder");
+			applyDescStyle(setting, syncFolderDesc(this.settings.syncFolder));
+			setting.addText((text) =>
+				text
+					.setPlaceholder("docs/vault")
+					.setValue(this.settings.syncFolder)
+					.onChange(async (value) => {
+						const validation = validateSyncFolder(value);
+						this.settings.syncFolder = validation.sanitized;
+						applyDescStyle(setting, syncFolderDesc(value));
+						await this.callbacks.onSave(this.settings);
+					}),
+			);
+		});
 
-		new Setting(containerEl)
-			.setName("Test connection")
-			.setDesc("Verify token and repository access")
-			.addButton((button) => {
+		connectionGroup.addSetting((setting) => {
+			setting.setName("Test connection");
+			setting.setDesc("Verify token and repository access");
+			setting.addButton((button) => {
 				button.setButtonText("Test").onClick(async () => {
 					const { githubToken, owner, repo } = this.settings;
 					if (!githubToken || !owner || !repo) {
@@ -286,78 +287,88 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					button.setDisabled(true);
 					try {
 						await this.callbacks.onTestConnection();
-						button.setButtonText("Connected ✓");
+						button.setButtonText("Connected \u2713");
 					} catch {
-						button.setButtonText("Failed ✗");
+						button.setButtonText("Failed \u2717");
 					}
 					button.setDisabled(false);
 					setTimeout(() => button.setButtonText("Test"), 3000);
 				});
 			});
+		});
 
-		new Setting(containerEl)
-			.setName("Auto-sync")
-			.setDesc("Automatically sync when files change in the vault")
-			.addToggle((toggle) =>
+		// ── Sync ────────────────────────────────────────────────────────
+		const syncGroup = new SettingGroup(containerEl);
+		syncGroup.setHeading("Sync");
+
+		syncGroup.addSetting((setting) => {
+			setting.setName("Auto-sync");
+			setting.setDesc("Automatically sync when files change in the vault");
+			setting.addToggle((toggle) =>
 				toggle.setValue(this.settings.autoSync).onChange(async (value) => {
 					this.settings.autoSync = value;
 					await this.callbacks.onSave(this.settings);
 				}),
 			);
+		});
 
-		const debounceSetting = new Setting(containerEl)
-			.setName("Auto-sync debounce")
-			.addText((text) => {
+		syncGroup.addSetting((setting) => {
+			applyDescStyle(setting, debounceDesc(this.settings.autoSyncDebounce));
+			setting.setName("Auto-sync debounce");
+			setting.addText((text) => {
 				text
 					.setPlaceholder("10")
 					.setValue(String(this.settings.autoSyncDebounce))
 					.onChange(async (value) => {
 						const num = Number.parseInt(value, 10);
 						if (Number.isNaN(num) || num < 1 || num > 300) {
-							applyDescStyle(debounceSetting, debounceDesc(this.settings.autoSyncDebounce, value));
+							applyDescStyle(setting, debounceDesc(this.settings.autoSyncDebounce, value));
 							return;
 						}
 						this.settings.autoSyncDebounce = num;
-						applyDescStyle(debounceSetting, debounceDesc(num));
+						applyDescStyle(setting, debounceDesc(num));
 						await this.callbacks.onSave(this.settings);
 					});
 				text.inputEl.addEventListener("blur", () => {
 					text.setValue(String(this.settings.autoSyncDebounce));
-					applyDescStyle(debounceSetting, debounceDesc(this.settings.autoSyncDebounce));
+					applyDescStyle(setting, debounceDesc(this.settings.autoSyncDebounce));
 				});
 			});
-		applyDescStyle(debounceSetting, debounceDesc(this.settings.autoSyncDebounce));
+		});
 
-		const pullIntervalSetting = new Setting(containerEl)
-			.setName("Remote pull interval")
-			.addText((text) => {
+		syncGroup.addSetting((setting) => {
+			applyDescStyle(setting, pullIntervalDesc(this.settings.autoSyncPullInterval));
+			setting.setName("Remote pull interval");
+			setting.addText((text) => {
 				text
 					.setPlaceholder("300")
 					.setValue(String(this.settings.autoSyncPullInterval))
 					.onChange(async (value) => {
 						const num = Number.parseInt(value, 10);
 						if (Number.isNaN(num) || num < 30 || num > 3600) {
-							applyDescStyle(
-								pullIntervalSetting,
-								pullIntervalDesc(this.settings.autoSyncPullInterval, value),
-							);
+							applyDescStyle(setting, pullIntervalDesc(this.settings.autoSyncPullInterval, value));
 							return;
 						}
 						this.settings.autoSyncPullInterval = num;
-						applyDescStyle(pullIntervalSetting, pullIntervalDesc(num));
+						applyDescStyle(setting, pullIntervalDesc(num));
 						await this.callbacks.onSave(this.settings);
 					});
 				text.inputEl.addEventListener("blur", () => {
 					text.setValue(String(this.settings.autoSyncPullInterval));
-					applyDescStyle(pullIntervalSetting, pullIntervalDesc(this.settings.autoSyncPullInterval));
+					applyDescStyle(setting, pullIntervalDesc(this.settings.autoSyncPullInterval));
 				});
 			});
-		applyDescStyle(pullIntervalSetting, pullIntervalDesc(this.settings.autoSyncPullInterval));
+		});
 
-		new Setting(containerEl)
-			.setName("Conflict strategy")
-			.setDesc("How to handle files changed on both sides")
-			.addDropdown((dropdown) =>
+		syncGroup.addSetting((setting) => {
+			setting.setName("Conflict strategy");
+			setting.descEl.createSpan({ text: "How to handle files changed on both sides." });
+			setting.descEl.createEl("br");
+			setting.descEl.createEl("a", {
+				text: "Learn more",
+				href: `${GUIDE_BASE}/settings.md#conflict-strategy`,
+			});
+			setting.addDropdown((dropdown) =>
 				dropdown
 					.addOptions({
 						skip: "Skip",
@@ -373,30 +384,85 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						}
 					}),
 			);
+		});
 
-		const excludeSetting = new Setting(containerEl)
-			.setName("Exclude patterns")
-			.setDesc(excludeDesc(this.settings.excludePatterns))
-			.addTextArea((text) =>
+		// ── Filtering ───────────────────────────────────────────────────
+		const filteringGroup = new SettingGroup(containerEl);
+		filteringGroup.setHeading("Filtering");
+
+		filteringGroup.addSetting((setting) => {
+			setting.setName("Exclude patterns");
+			setting.setDesc(excludeDesc(this.settings.excludePatterns));
+			setting.addTextArea((text) =>
 				text
 					.setPlaceholder("drafts/**\n*.tmp\nprivate/**")
 					.setValue(this.settings.excludePatterns)
 					.onChange(async (value) => {
 						const validation = validateExcludePatterns(value);
-						excludeSetting.setDesc(validation.desc);
-						const descEl = excludeSetting.descEl;
-						if (descEl) {
-							descEl.style.color = validation.hasErrors ? "var(--text-error)" : "";
+						setting.setDesc(validation.desc);
+						if (setting.descEl) {
+							setting.descEl.style.color = validation.hasErrors ? "var(--text-error)" : "";
 						}
 						this.settings.excludePatterns = validation.cleanValue;
 						await this.callbacks.onSave(this.settings);
 					}),
 			);
+		});
 
-		new Setting(containerEl)
-			.setName("Log level")
-			.setDesc("Minimum level for log messages")
-			.addDropdown((dropdown) =>
+		// ── Integrations ────────────────────────────────────────────────
+		let dispatchEventSetting: Setting | null = null;
+
+		const integrationsGroup = new SettingGroup(containerEl);
+		integrationsGroup.setHeading("Integrations");
+
+		integrationsGroup.addSetting((setting) => {
+			setting.setName("Trigger workflow on push");
+			setting.descEl.createSpan({
+				text: "Run a GitHub Actions workflow after each push.",
+			});
+			setting.descEl.createEl("br");
+			setting.descEl.createEl("a", {
+				text: "Setup guide \u2192",
+				href: `${GUIDE_BASE}/workflow-dispatch.md`,
+			});
+			setting.addToggle((toggle) =>
+				toggle.setValue(this.settings.dispatchOnPush).onChange(async (value) => {
+					this.settings.dispatchOnPush = value;
+					dispatchEventSetting?.settingEl.toggle(value);
+					await this.callbacks.onSave(this.settings);
+				}),
+			);
+		});
+
+		integrationsGroup.addSetting((setting) => {
+			dispatchEventSetting = setting;
+			setting.setName("Event type");
+			setting.descEl.createSpan({
+				text: "Must match the type in your workflow file.",
+			});
+			setting.descEl.createEl("br");
+			setting.descEl.createSpan({ text: "Example: " });
+			setting.descEl.createEl("code", { text: "types: [vault-synced]" });
+			setting.addText((text) =>
+				text
+					.setPlaceholder("vault-synced")
+					.setValue(this.settings.dispatchEventType)
+					.onChange(async (value) => {
+						this.settings.dispatchEventType = value.trim();
+						await this.callbacks.onSave(this.settings);
+					}),
+			);
+			setting.settingEl.toggle(this.settings.dispatchOnPush);
+		});
+
+		// ── Advanced ────────────────────────────────────────────────────
+		const advancedGroup = new SettingGroup(containerEl);
+		advancedGroup.setHeading("Advanced");
+
+		advancedGroup.addSetting((setting) => {
+			setting.setName("Log level");
+			setting.setDesc("Minimum level for log messages");
+			setting.addDropdown((dropdown) =>
 				dropdown
 					.addOptions({
 						debug: "Debug",
@@ -412,5 +478,22 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						}
 					}),
 			);
+		});
+
+		// ── Footer ──────────────────────────────────────────────────────
+		const footer = containerEl.createEl("p");
+		footer.style.textAlign = "center";
+		footer.style.marginTop = "24px";
+		footer.style.color = "var(--text-muted)";
+		footer.style.fontSize = "var(--font-ui-smaller)";
+		footer.createEl("a", {
+			text: "Documentation & setup guide",
+			href: GUIDE_BASE,
+		});
+		footer.createSpan({ text: "  \u00b7  " });
+		footer.createEl("a", {
+			text: "Report an issue",
+			href: "https://github.com/nyxene/obsidian-ghvault/issues",
+		});
 	}
 }

@@ -14,6 +14,8 @@ export interface GHVaultSettings {
 	autoSyncPullInterval: number;
 	conflictStrategy: ConflictStrategy;
 	excludePatterns: string;
+	dispatchOnPush: boolean;
+	dispatchEventType: string;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -220,4 +222,6 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	autoSyncPullInterval: 300,
 	conflictStrategy: "skip",
 	excludePatterns: "",
+	dispatchOnPush: false,
+	dispatchEventType: "vault-synced",
 };
