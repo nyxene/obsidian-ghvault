@@ -1,4 +1,4 @@
-import { type EventRef, Notice, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
+import { type EventRef, Modal, Notice, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
 import { GitHubClient } from "./github/client";
 import { GitHubGraphQL } from "./github/graphql";
 import { RateLimiter } from "./github/rate-limit";
@@ -10,6 +10,7 @@ import { PushEngine } from "./sync/push";
 import { SyncStateManager } from "./sync/state";
 import { ObsidianVaultAdapter } from "./sync/vault-adapter";
 import type {
+	BackupRecord,
 	ChangeType,
 	ConflictContentProvider,
 	ConflictDecision,
@@ -25,6 +26,7 @@ import {
 	VALID_CONFLICT_STRATEGIES,
 	VALID_LOG_LEVELS,
 } from "./types";
+import { BackupModal, formatSize } from "./ui/backup-modal";
 import { ConflictModal } from "./ui/conflict-modal";
 import { FileHistoryModal } from "./ui/file-history-modal";
 import { GistManagerModal } from "./ui/gist-manager-modal";
@@ -32,6 +34,7 @@ import { GistModal } from "./ui/gist-modal";
 import { buildSyncStatusData, SYNC_STATUS_VIEW_TYPE, SyncStatusView } from "./ui/sync-status-view";
 import { Logger } from "./utils/logger";
 import { getEffectiveExcludePatterns, isExcluded, isSafePath, toRepoPath } from "./utils/path";
+import { createZipFromEntries, MAX_BACKUP_SIZE, processZipEntries } from "./utils/zip";
 
 const PENDING_CHANGES_KEY = "pendingChanges";
 const VALID_CHANGE_TYPES = new Set<string>(["create", "modify", "delete"]);
@@ -107,6 +110,18 @@ export default class GHVaultPlugin extends Plugin {
 			this.openGistManager();
 		});
 
+		this.addRibbonIcon("archive", "GHVault: Backup vault", () => {
+			this.backupVault();
+		});
+
+		this.addRibbonIcon("history", "GHVault: Manage backups", () => {
+			if (!this.githubClient) {
+				new Notice("GHVault: Configure settings first (token, owner, repo)");
+				return;
+			}
+			this.openBackupManager();
+		});
+
 		this.addCommand({
 			id: "ghvault-sync",
 			name: "Sync now",
@@ -170,6 +185,26 @@ export default class GHVaultPlugin extends Plugin {
 				if (!this.githubClient) return false;
 				if (!checking) {
 					this.openGistManager();
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "ghvault-backup-vault",
+			name: "Backup vault",
+			callback: () => {
+				this.backupVault();
+			},
+		});
+
+		this.addCommand({
+			id: "ghvault-manage-backups",
+			name: "Manage backups",
+			checkCallback: (checking) => {
+				if (!this.githubClient) return false;
+				if (!checking) {
+					this.openBackupManager();
 				}
 				return true;
 			},
@@ -704,6 +739,126 @@ export default class GHVaultPlugin extends Plugin {
 		modal.open();
 	}
 
+	private async backupVault(): Promise<void> {
+		if (!this.githubClient) {
+			new Notice("GHVault: Configure settings first (token, owner, repo)");
+			return;
+		}
+
+		try {
+			const excludePatterns = getEffectiveExcludePatterns(this.settings.excludePatterns);
+			const allFiles = this.app.vault.getFiles().filter((f) => {
+				if (isExcluded(f.path, excludePatterns)) return false;
+				if (this.isSyncExcludedByFrontmatter(f.path)) return false;
+				return true;
+			});
+
+			// Check total size
+			let totalSize = 0;
+			for (const file of allFiles) {
+				totalSize += file.stat.size;
+			}
+			if (totalSize > MAX_BACKUP_SIZE) {
+				new Notice(
+					`GHVault: Vault too large for backup (${Math.round(totalSize / 1024 / 1024)}MB, max 500MB)`,
+				);
+				return;
+			}
+
+			// Confirmation
+			const confirmed = await this.confirmBackup(allFiles.length, totalSize);
+			if (!confirmed) return;
+
+			new Notice("GHVault: Creating backup...");
+
+			// Read all files as binary
+			const entries: Record<string, Uint8Array> = {};
+			for (const file of allFiles) {
+				const buffer = await this.app.vault.readBinary(file);
+				entries[file.path] = new Uint8Array(buffer);
+			}
+
+			// Create ZIP
+			const zipBuffer = createZipFromEntries(entries);
+
+			// Create release with timestamp tag
+			const now = new Date();
+			const pad = (n: number): string => String(n).padStart(2, "0");
+			const tagName = `backup-${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+
+			const release = await this.githubClient.createRelease({
+				tagName,
+				name: `Vault Backup ${tagName}`,
+				body: `Vault backup created at ${now.toISOString()}\n\nFiles: ${allFiles.length}\nSize: ${Math.round(totalSize / 1024 / 1024)}MB`,
+			});
+
+			// Upload ZIP as asset
+			await this.githubClient.uploadReleaseAsset(release.uploadUrl, "vault-backup.zip", zipBuffer);
+
+			// Copy URL to clipboard
+			try {
+				await navigator.clipboard.writeText(release.htmlUrl);
+				new Notice(`GHVault: Backup created (${allFiles.length} files) — URL copied to clipboard`);
+			} catch {
+				new Notice(`GHVault: Backup created (${allFiles.length} files) — ${release.htmlUrl}`);
+			}
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logger?.error("Backup failed", { error: message });
+			new Notice(`GHVault: Backup failed — ${message}`);
+		}
+	}
+
+	private async restoreFromBackup(backup: BackupRecord): Promise<void> {
+		if (!this.githubClient) {
+			new Notice("GHVault: Configure settings first");
+			return;
+		}
+
+		new Notice("GHVault: Downloading backup...");
+		const zipBuffer = await this.githubClient.downloadReleaseAsset(backup.assetDownloadUrl);
+
+		let restored = 0;
+		await processZipEntries(zipBuffer, async (path, data) => {
+			const existing = this.app.vault.getFileByPath(path);
+			if (existing) {
+				await this.app.vault.modifyBinary(existing, data.buffer as ArrayBuffer);
+			} else {
+				// Ensure parent directories exist
+				const parentPath = path.substring(0, path.lastIndexOf("/"));
+				if (parentPath) {
+					const parentExists = this.app.vault.getFolderByPath(parentPath);
+					if (!parentExists) {
+						await this.app.vault.createFolder(parentPath);
+					}
+				}
+				await this.app.vault.createBinary(path, data.buffer as ArrayBuffer);
+			}
+			restored++;
+		});
+
+		new Notice(`GHVault: Restored ${restored} files from backup`);
+	}
+
+	private openBackupManager(): void {
+		if (!this.githubClient) {
+			new Notice("GHVault: Configure settings first");
+			return;
+		}
+
+		const modal = new BackupModal(
+			this.app,
+			this.githubClient,
+			async (backup) => {
+				await this.restoreFromBackup(backup);
+			},
+			async (backup) => {
+				await this.githubClient?.deleteRelease(backup.id);
+			},
+		);
+		modal.open();
+	}
+
 	private async loadGistRegistry(): Promise<void> {
 		const data = await this.loadData();
 		const raw = data?.gistRegistry;
@@ -716,6 +871,42 @@ export default class GHVaultPlugin extends Plugin {
 		const data = (await this.loadData()) || {};
 		data.gistRegistry = this.gistRegistry;
 		await this.saveData(data);
+	}
+
+	private confirmBackup(fileCount: number, totalBytes: number): Promise<boolean> {
+		return new Promise<boolean>((resolve) => {
+			const modal = new Modal(this.app);
+			modal.contentEl.createEl("h2", { text: "Create Backup" });
+			modal.contentEl.createEl("p", {
+				text: `${fileCount} files (${formatSize(totalBytes)}) will be archived and uploaded to GitHub.`,
+			});
+
+			const btnRow = modal.contentEl.createEl("div");
+			Object.assign(btnRow.style, {
+				display: "flex",
+				gap: "8px",
+				justifyContent: "flex-end",
+				marginTop: "16px",
+			});
+
+			const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
+			cancelBtn.addEventListener("click", () => {
+				resolve(false);
+				modal.close();
+			});
+
+			const confirmBtn = btnRow.createEl("button", { text: "Backup", cls: "mod-cta" });
+			confirmBtn.addEventListener("click", () => {
+				resolve(true);
+				modal.close();
+			});
+
+			modal.onClose = () => {
+				resolve(false);
+			};
+
+			modal.open();
+		});
 	}
 
 	private isSyncExcludedByFrontmatter(path: string): boolean {

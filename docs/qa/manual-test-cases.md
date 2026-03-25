@@ -1069,3 +1069,114 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Edit the file
 3. Share the same file again via ribbon/command
 **Expected:** Modal shows "Update Gist" title. Clicking "Update" refreshes the existing gist (same URL), not creates a new one.
+
+---
+
+## Group I: Vault Backup
+
+### TC-BACKUP-001: Backup vault via ribbon
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Configured plugin with Contents: R/W permission on PAT
+**Steps:**
+1. Click the "Backup vault" ribbon icon (archive icon)
+2. Wait for backup to complete
+**Expected:** Notice "Backup created (N files) — URL copied to clipboard". Release visible on GitHub Releases page with tag `backup-YYYY-MM-DD-HHmmss`.
+
+### TC-BACKUP-002: Backup vault via command palette
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open command palette (Ctrl/Cmd+P)
+2. Search "GHVault: Backup vault"
+3. Execute command
+**Expected:** Same as TC-BACKUP-001.
+
+### TC-BACKUP-003: Backup without settings configured
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Token, owner, or repo is empty
+**Steps:**
+1. Click "Backup vault" ribbon icon
+**Expected:** Notice: "Configure settings first (token, owner, repo)"
+
+### TC-BACKUP-004: Manage backups — view list
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** At least one vault backup exists
+**Steps:**
+1. Click "Manage backups" ribbon icon (history icon)
+**Expected:** Modal opens showing list of backups with tag name, date, size. Each entry has [Copy URL], [Restore], [Delete] buttons.
+
+### TC-BACKUP-005: Manage backups — empty state
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** No backup releases exist
+**Steps:**
+1. Click "Manage backups" ribbon icon
+**Expected:** Modal opens showing "No backups yet." message.
+
+### TC-BACKUP-006: Restore from backup
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** At least one vault backup exists
+**Steps:**
+1. Open Manage backups
+2. Click "Restore" on a backup entry
+3. Confirmation dialog appears: "This will overwrite all current vault files. Continue?"
+4. Click "Restore"
+**Expected:** All files from the backup ZIP are written to vault. Notice: "Restored N files from backup".
+
+### TC-BACKUP-007: Delete backup
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** At least one vault backup exists
+**Steps:**
+1. Open Manage backups
+2. Click "Delete" on a backup entry
+**Expected:** Release deleted from GitHub. Entry removed from list. Notice: "Backup deleted".
+
+### TC-BACKUP-008: Vault too large for backup
+**Priority:** P2
+**Platform:** Both
+**Preconditions:** Vault total file size exceeds 500MB
+**Steps:**
+1. Click "Backup vault"
+**Expected:** Notice: "Vault too large for backup (NMB, max 500MB)". No release created.
+
+### TC-BACKUP-009: Open backup manager, close, reopen shows backups
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** At least one vault backup exists
+**Steps:**
+1. Open Manage Backups
+2. Verify backup list loads correctly
+3. Close the modal
+4. Reopen Manage Backups
+**Expected:** Backup list loads correctly both times, no errors.
+
+### TC-BACKUP-010: Backup manager handles API error gracefully
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Invalid or missing GitHub token
+**Steps:**
+1. Try to open Manage Backups with invalid/missing token
+**Expected:** Shows error message with Retry button, not empty list or crash.
+
+### TC-BACKUP-011: ETag caching works for repeated backup list opens
+**Priority:** P2
+**Platform:** Both
+**Preconditions:** At least one vault backup exists
+**Steps:**
+1. Open Manage Backups
+2. Close the modal
+3. Open Manage Backups again quickly
+**Expected:** Second open uses cached data (fast), no "Unexpected end of JSON" error.
+
+### TC-BACKUP-012: Backup creation shows confirmation with correct size
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Vault with files of various sizes
+**Steps:**
+1. Click "Backup vault" with files of various sizes
+**Expected:** Confirmation dialog shows correct file count and size (KB for small, MB for large).

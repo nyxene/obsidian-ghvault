@@ -1,6 +1,19 @@
-import { unzipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
 
 export const MAX_DECOMPRESSED_SIZE = 500 * 1024 * 1024; // 500MB
+export const MAX_BACKUP_SIZE = 500 * 1024 * 1024; // 500MB
+
+/**
+ * Create a ZIP archive from a map of path → data entries.
+ * Returns the ZIP as an ArrayBuffer.
+ */
+export function createZipFromEntries(entries: Record<string, Uint8Array>): ArrayBuffer {
+	const zipped = zipSync(entries);
+	return zipped.buffer.slice(
+		zipped.byteOffset,
+		zipped.byteOffset + zipped.byteLength,
+	) as ArrayBuffer;
+}
 
 /**
  * Process ZIP entries one by one, stripping the root directory prefix

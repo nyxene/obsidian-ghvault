@@ -1,6 +1,6 @@
 import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { processZipEntries } from "./zip";
+import { createZipFromEntries, processZipEntries } from "./zip";
 
 function createZip(files: Record<string, string>): ArrayBuffer {
 	const entries: Record<string, Uint8Array> = {};
@@ -116,5 +116,44 @@ describe("processZipEntries", () => {
 		// 1MB limit — should be fine for 4 bytes
 		const count = await processZipEntries(zip, async () => {}, 1024 * 1024);
 		expect(count).toBe(1);
+	});
+});
+
+describe("createZipFromEntries", () => {
+	it("creates a valid ZIP that can be round-tripped with processZipEntries", async () => {
+		const entries: Record<string, Uint8Array> = {
+			"notes/hello.md": new TextEncoder().encode("# Hello"),
+			"notes/world.md": new TextEncoder().encode("# World"),
+		};
+
+		const zipBuffer = createZipFromEntries(entries);
+		expect(zipBuffer).toBeInstanceOf(ArrayBuffer);
+		expect(zipBuffer.byteLength).toBeGreaterThan(0);
+
+		// Round-trip: the ZIP from createZipFromEntries has no root prefix,
+		// so processZipEntries will strip the first path component.
+		// Instead, manually verify with unzipSync:
+		const { unzipSync } = await import("fflate");
+		const unzipped = unzipSync(new Uint8Array(zipBuffer));
+		const paths = Object.keys(unzipped);
+		expect(paths).toContain("notes/hello.md");
+		expect(paths).toContain("notes/world.md");
+		expect(new TextDecoder().decode(unzipped["notes/hello.md"])).toBe("# Hello");
+		expect(new TextDecoder().decode(unzipped["notes/world.md"])).toBe("# World");
+	});
+
+	it("handles binary content", () => {
+		const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+		const entries: Record<string, Uint8Array> = {
+			"image.png": binaryData,
+		};
+
+		const zipBuffer = createZipFromEntries(entries);
+		expect(zipBuffer.byteLength).toBeGreaterThan(0);
+	});
+
+	it("handles empty entries", () => {
+		const zipBuffer = createZipFromEntries({});
+		expect(zipBuffer).toBeInstanceOf(ArrayBuffer);
 	});
 });

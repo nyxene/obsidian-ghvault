@@ -774,6 +774,26 @@ describe("GitHubClient", () => {
 		});
 	});
 
+	describe("request() with throw: false", () => {
+		it("handles 401 status returned (not thrown) as GitHubAuthError", async () => {
+			// With throw: false, Obsidian returns the response instead of throwing.
+			// The request() method must check response.status and convert to typed errors.
+			mockRequest.mockResolvedValueOnce({
+				status: 401,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				json: { message: "Bad credentials" },
+				text: '{"message":"Bad credentials"}',
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(createClient().getRepoInfo()).rejects.toThrow(GitHubAuthError);
+		});
+	});
+
 	describe("ETag conditional requests", () => {
 		beforeEach(() => {
 			mockRequest.mockReset();
@@ -828,15 +848,18 @@ describe("GitHubClient", () => {
 			const client = createClient();
 			const first = await client.getRef("main");
 
-			// 304 response (thrown as error by requestUrl)
-			mockRequest.mockRejectedValueOnce({
+			// 304 response (with throw: false, returned as resolved response)
+			mockRequest.mockResolvedValueOnce({
 				status: 304,
 				headers: {
 					"x-ratelimit-limit": "5000",
 					"x-ratelimit-remaining": "4999",
 					"x-ratelimit-reset": "1700000000",
 				},
-			});
+				json: null,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
 
 			const second = await client.getRef("main");
 			expect(second).toEqual(first);
@@ -850,15 +873,18 @@ describe("GitHubClient", () => {
 			const client = createClient(rateLimiter);
 			await client.getRef("main");
 
-			// 304 with updated rate limit
-			mockRequest.mockRejectedValueOnce({
+			// 304 with updated rate limit (with throw: false, returned as resolved)
+			mockRequest.mockResolvedValueOnce({
 				status: 304,
 				headers: {
 					"x-ratelimit-limit": "5000",
 					"x-ratelimit-remaining": "4500",
 					"x-ratelimit-reset": "1700000000",
 				},
-			});
+				json: null,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
 
 			await client.getRef("main");
 			const state = rateLimiter.getState("rest");
@@ -918,15 +944,251 @@ describe("GitHubClient", () => {
 			await expect(client.getRef("main")).rejects.toThrow();
 		});
 
-		it("throws 304 as error when no cache exists", async () => {
+		it("throws error when 304 received but no cache exists", async () => {
 			const client = createClient();
 
-			mockRequest.mockRejectedValueOnce({
+			mockRequest.mockResolvedValueOnce({
 				status: 304,
-				headers: {},
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				json: null,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(client.getRef("main")).rejects.toThrow("Invalid API response");
+		});
+	});
+
+	describe("createRelease", () => {
+		it("returns id, htmlUrl, and uploadUrl", async () => {
+			mockResponse({
+				id: 42,
+				html_url: "https://github.com/owner/repo/releases/tag/backup-2026",
+				upload_url: "https://uploads.github.com/repos/owner/repo/releases/42/assets{?name,label}",
+			});
+			const result = await createClient().createRelease({
+				tagName: "backup-2026-01-01-120000",
+				name: "Vault Backup",
+				body: "Test backup",
+			});
+			expect(result).toEqual({
+				id: 42,
+				htmlUrl: "https://github.com/owner/repo/releases/tag/backup-2026",
+				uploadUrl: "https://uploads.github.com/repos/owner/repo/releases/42/assets{?name,label}",
+			});
+		});
+
+		it("sends correct POST body", async () => {
+			mockResponse({
+				id: 1,
+				html_url: "https://github.com/owner/repo/releases/tag/t",
+				upload_url: "https://uploads.github.com/repos/owner/repo/releases/1/assets{?name,label}",
+			});
+			await createClient().createRelease({
+				tagName: "backup-tag",
+				name: "My Release",
+				body: "Description here",
 			});
 
-			await expect(client.getRef("main")).rejects.toBeDefined();
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/repos/testowner/testrepo/releases");
+			expect(arg.method).toBe("POST");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.tag_name).toBe("backup-tag");
+			expect(body.name).toBe("My Release");
+			expect(body.body).toBe("Description here");
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ bad: "shape" });
+			await expect(
+				createClient().createRelease({ tagName: "t", name: "n", body: "b" }),
+			).rejects.toThrow("Invalid release response from GitHub API");
+		});
+	});
+
+	describe("uploadReleaseAsset", () => {
+		it("strips template from uploadUrl and sends correct content-type", async () => {
+			const client = createClient();
+			mockRequest.mockResolvedValue({
+				json: {
+					browser_download_url:
+						"https://github.com/owner/repo/releases/download/tag/vault-backup.zip",
+					size: 1024,
+				},
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 201,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const data = new ArrayBuffer(16);
+			const result = await client.uploadReleaseAsset(
+				"https://uploads.github.com/repos/owner/repo/releases/42/assets{?name,label}",
+				"vault-backup.zip",
+				data,
+			);
+
+			expect(result).toEqual({
+				downloadUrl: "https://github.com/owner/repo/releases/download/tag/vault-backup.zip",
+				size: 1024,
+			});
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; headers: Record<string, string> };
+			expect(arg.url).toBe(
+				"https://uploads.github.com/repos/owner/repo/releases/42/assets?name=vault-backup.zip",
+			);
+			expect(arg.method).toBe("POST");
+			expect(arg.headers["Content-Type"]).toBe("application/zip");
+		});
+	});
+
+	describe("listReleases", () => {
+		it("filters by backup- prefix and maps to BackupRecord", async () => {
+			mockResponse([
+				{
+					id: 1,
+					tag_name: "backup-2026-01-01-120000",
+					name: "Vault Backup",
+					created_at: "2026-01-01T12:00:00Z",
+					html_url: "https://github.com/owner/repo/releases/tag/backup-2026",
+					assets: [
+						{
+							name: "vault-backup.zip",
+							size: 2048,
+							browser_download_url:
+								"https://github.com/owner/repo/releases/download/backup-2026/vault-backup.zip",
+						},
+					],
+				},
+				{
+					id: 2,
+					tag_name: "v1.0.0",
+					name: "Release 1.0",
+					created_at: "2026-01-02T12:00:00Z",
+					html_url: "https://github.com/owner/repo/releases/tag/v1.0.0",
+					assets: [],
+				},
+			]);
+
+			const result = await createClient().listReleases();
+
+			expect(result).toHaveLength(1);
+			expect(result[0]).toEqual({
+				id: 1,
+				tagName: "backup-2026-01-01-120000",
+				name: "Vault Backup",
+				createdAt: "2026-01-01T12:00:00Z",
+				htmlUrl: "https://github.com/owner/repo/releases/tag/backup-2026",
+				assetName: "vault-backup.zip",
+				assetSize: 2048,
+				assetDownloadUrl:
+					"https://github.com/owner/repo/releases/download/backup-2026/vault-backup.zip",
+			});
+		});
+
+		it("returns empty array when no backup releases exist", async () => {
+			mockResponse([
+				{
+					id: 1,
+					tag_name: "v1.0.0",
+					name: "Release",
+					created_at: "2026-01-01T00:00:00Z",
+					html_url: "https://github.com/owner/repo/releases/tag/v1.0.0",
+					assets: [],
+				},
+			]);
+			const result = await createClient().listReleases();
+			expect(result).toEqual([]);
+		});
+
+		it("handles releases with no assets", async () => {
+			mockResponse([
+				{
+					id: 1,
+					tag_name: "backup-empty",
+					name: "Empty backup",
+					created_at: "2026-01-01T00:00:00Z",
+					html_url: "https://github.com/owner/repo/releases/tag/backup-empty",
+					assets: [],
+				},
+			]);
+			const result = await createClient().listReleases();
+			expect(result).toHaveLength(1);
+			expect(result[0].assetName).toBe("");
+			expect(result[0].assetSize).toBe(0);
+			expect(result[0].assetDownloadUrl).toBe("");
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ error: "not an array" });
+			await expect(createClient().listReleases()).rejects.toThrow("Invalid releases response");
+		});
+	});
+
+	describe("deleteRelease", () => {
+		it("succeeds on successful delete", async () => {
+			mockRequest.mockResolvedValue({
+				json: null,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 204,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(createClient().deleteRelease(42)).resolves.toBeUndefined();
+		});
+
+		it("silently handles 404 (already deleted)", async () => {
+			mockRequest.mockRejectedValue({ status: 404 });
+			await expect(createClient().deleteRelease(999)).resolves.toBeUndefined();
+		});
+
+		it("throws GitHubAuthError on 401", async () => {
+			mockRequest.mockRejectedValue({ status: 401 });
+			await expect(createClient().deleteRelease(42)).rejects.toThrow(GitHubAuthError);
+		});
+	});
+
+	describe("downloadReleaseAsset", () => {
+		it("returns ArrayBuffer", async () => {
+			const client = createClient();
+			const fakeData = new ArrayBuffer(32);
+			mockRequest.mockResolvedValue({
+				json: null,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4998",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "",
+				arrayBuffer: fakeData,
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const result = await client.downloadReleaseAsset(
+				"https://github.com/owner/repo/releases/download/tag/vault-backup.zip",
+			);
+
+			expect(result).toBe(fakeData);
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; headers: Record<string, string> };
+			expect(arg.url).toContain("vault-backup.zip");
+			expect(arg.headers.Accept).toBe("application/octet-stream");
 		});
 	});
 });

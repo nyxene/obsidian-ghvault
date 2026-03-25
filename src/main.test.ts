@@ -53,11 +53,26 @@ vi.mock("obsidian", async (importOriginal) => {
 
 const mockGetRepoInfo = vi.fn();
 const mockGetRef = vi.fn();
+const mockCreateRelease = vi.fn().mockResolvedValue({
+	id: 1,
+	htmlUrl: "https://github.com/owner/repo/releases/tag/backup-test",
+	uploadUrl: "https://uploads.github.com/repos/owner/repo/releases/1/assets{?name,label}",
+});
+const mockUploadReleaseAsset = vi.fn().mockResolvedValue({
+	downloadUrl: "https://github.com/owner/repo/releases/download/tag/vault-backup.zip",
+	size: 1024,
+});
+const mockDeleteRelease = vi.fn().mockResolvedValue(undefined);
+const mockDownloadReleaseAsset = vi.fn().mockResolvedValue(new ArrayBuffer(16));
 
 vi.mock("./github/client", () => ({
 	GitHubClient: class MockGitHubClient {
 		getRepoInfo = mockGetRepoInfo;
 		getRef = mockGetRef;
+		createRelease = mockCreateRelease;
+		uploadReleaseAsset = mockUploadReleaseAsset;
+		deleteRelease = mockDeleteRelease;
+		downloadReleaseAsset = mockDownloadReleaseAsset;
 	},
 }));
 
@@ -148,6 +163,20 @@ vi.mock("./ui/file-history-modal", () => ({
 	FileHistoryModal: class MockFileHistoryModal {
 		open = vi.fn();
 	},
+}));
+
+const mockBackupModalOpen = vi.fn();
+
+vi.mock("./ui/backup-modal", () => ({
+	BackupModal: class MockBackupModal {
+		open = mockBackupModalOpen;
+	},
+}));
+
+vi.mock("./utils/zip", () => ({
+	createZipFromEntries: vi.fn().mockReturnValue(new ArrayBuffer(16)),
+	processZipEntries: vi.fn().mockResolvedValue(0),
+	MAX_BACKUP_SIZE: 500 * 1024 * 1024,
 }));
 
 let capturedChangeQueueOnReady: (() => void) | null = null;
@@ -404,6 +433,17 @@ describe("GHVaultPlugin", () => {
 		mockGistModalOpen.mockClear();
 		mockGistModalWaitForResult.mockReset().mockResolvedValue(null);
 		mockGistManagerModalOpen.mockClear();
+		mockBackupModalOpen.mockClear();
+		mockCreateRelease.mockClear().mockResolvedValue({
+			id: 1,
+			htmlUrl: "https://github.com/owner/repo/releases/tag/backup-test",
+			uploadUrl: "https://uploads.github.com/repos/owner/repo/releases/1/assets{?name,label}",
+		});
+		mockUploadReleaseAsset.mockClear().mockResolvedValue({
+			downloadUrl: "https://github.com/owner/repo/releases/download/tag/vault-backup.zip",
+			size: 1024,
+		});
+		mockDeleteRelease.mockClear().mockResolvedValue(undefined);
 		capturedChangeQueueOnReady = null;
 		capturedChangeQueueOnPersist = null;
 		mockChangeQueuePause.mockClear();
@@ -2055,6 +2095,269 @@ describe("GHVaultPlugin", () => {
 
 			const cmd = getCommand(plugin, "ghvault-manage-gists");
 			expect(cmd?.checkCallback(true)).toBe(false);
+		});
+	});
+
+	describe("backup commands", () => {
+		it("backup-vault command is registered", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const backupCmd = calls.find(
+				(c: [{ id: string; name: string }]) => c[0].id === "ghvault-backup-vault",
+			);
+			expect(backupCmd).toBeDefined();
+			expect(backupCmd?.[0].name).toBe("Backup vault");
+		});
+
+		it("manage-backups command is registered", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addCommand).mock.calls;
+			const manageCmd = calls.find(
+				(c: [{ id: string; name: string }]) => c[0].id === "ghvault-manage-backups",
+			);
+			expect(manageCmd).toBeDefined();
+			expect(manageCmd?.[0].name).toBe("Manage backups");
+		});
+
+		it("backup ribbon icons are registered", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const calls = vi.mocked(plugin.addRibbonIcon).mock.calls;
+			const archiveRibbon = calls.find((c: [string, string, () => void]) => c[0] === "archive");
+			const historyRibbon = calls.find((c: [string, string, () => void]) => c[0] === "history");
+			expect(archiveRibbon).toBeDefined();
+			expect(archiveRibbon?.[1]).toBe("GHVault: Backup vault");
+			expect(historyRibbon).toBeDefined();
+			expect(historyRibbon?.[1]).toBe("GHVault: Manage backups");
+		});
+
+		it("backupVault creates ZIP and uploads", async () => {
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "note.md";
+			file.extension = "md";
+			file.stat = { size: 100, ctime: 0, mtime: 0 };
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([file]);
+			vault.readBinary = vi.fn().mockResolvedValue(new ArrayBuffer(100));
+
+			// Skip confirmation dialog
+			plugin.confirmBackup = vi.fn().mockResolvedValue(true);
+
+			Object.defineProperty(globalThis, "navigator", {
+				value: { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } },
+				writable: true,
+				configurable: true,
+			});
+
+			await plugin.backupVault();
+
+			expect(mockCreateRelease).toHaveBeenCalledTimes(1);
+			expect(mockUploadReleaseAsset).toHaveBeenCalledTimes(1);
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Backup created"));
+			expect(notice).toBeDefined();
+		});
+
+		it("backupVault shows notice when not configured", async () => {
+			const { plugin } = await loadPlugin(null);
+
+			await plugin.backupVault();
+
+			const notice = noticeLog.find((n: NoticeRecord) =>
+				n.message.includes("Configure settings first"),
+			);
+			expect(notice).toBeDefined();
+		});
+
+		it("openBackupManager opens modal", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			plugin.openBackupManager();
+
+			expect(mockBackupModalOpen).toHaveBeenCalledTimes(1);
+		});
+
+		it("manage-backups checkCallback returns false when no githubClient", async () => {
+			const { plugin } = await loadPlugin(null);
+
+			function getCmd(
+				p: AnyPlugin,
+				id: string,
+			): { checkCallback: (checking: boolean) => boolean | undefined } | undefined {
+				const calls = vi.mocked(p.addCommand).mock.calls;
+				const cmd = calls.find((c: [{ id: string }]) => c[0].id === id);
+				return cmd?.[0] as
+					| { checkCallback: (checking: boolean) => boolean | undefined }
+					| undefined;
+			}
+
+			const cmd = getCmd(plugin, "ghvault-manage-backups");
+			expect(cmd?.checkCallback(true)).toBe(false);
+		});
+
+		it("confirmBackup is called with correct file count and total size", async () => {
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "note.md";
+			file.extension = "md";
+			file.stat = { size: 2621440, ctime: 0, mtime: 0 }; // 2.5 MB
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([file]);
+			vault.readBinary = vi.fn().mockResolvedValue(new ArrayBuffer(2621440));
+
+			// Mock confirmBackup to capture args (confirmBackup calls formatSize internally)
+			plugin.confirmBackup = vi.fn().mockResolvedValue(false);
+
+			await plugin.backupVault();
+
+			// backupVault passes fileCount and totalBytes to confirmBackup,
+			// which uses formatSize to display "2.5 MB" in the confirmation dialog
+			expect(plugin.confirmBackup).toHaveBeenCalledWith(1, 2621440);
+		});
+
+		it("backupVault shows notice and skips when vault exceeds MAX_BACKUP_SIZE", async () => {
+			const { TFile } = await import("obsidian");
+			// Create files whose total size exceeds 500MB
+			const bigFile = new TFile();
+			bigFile.path = "huge.bin";
+			bigFile.extension = "bin";
+			bigFile.stat = { size: 300 * 1024 * 1024, ctime: 0, mtime: 0 };
+
+			const bigFile2 = new TFile();
+			bigFile2.path = "huge2.bin";
+			bigFile2.extension = "bin";
+			bigFile2.stat = { size: 300 * 1024 * 1024, ctime: 0, mtime: 0 };
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([bigFile, bigFile2]);
+
+			await plugin.backupVault();
+
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Vault too large"));
+			expect(notice).toBeDefined();
+			expect(mockCreateRelease).not.toHaveBeenCalled();
+		});
+
+		it("backupVault shows error notice when createRelease throws", async () => {
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "note.md";
+			file.extension = "md";
+			file.stat = { size: 100, ctime: 0, mtime: 0 };
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([file]);
+			vault.readBinary = vi.fn().mockResolvedValue(new ArrayBuffer(100));
+
+			plugin.confirmBackup = vi.fn().mockResolvedValue(true);
+			mockCreateRelease.mockRejectedValueOnce(new Error("API error"));
+
+			await plugin.backupVault();
+
+			const notice = noticeLog.find((n: NoticeRecord) =>
+				n.message.includes("Backup failed — API error"),
+			);
+			expect(notice).toBeDefined();
+		});
+
+		it("backupVault shows release URL in notice when clipboard fails", async () => {
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "note.md";
+			file.extension = "md";
+			file.stat = { size: 100, ctime: 0, mtime: 0 };
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([file]);
+			vault.readBinary = vi.fn().mockResolvedValue(new ArrayBuffer(100));
+
+			plugin.confirmBackup = vi.fn().mockResolvedValue(true);
+
+			Object.defineProperty(globalThis, "navigator", {
+				value: {
+					clipboard: {
+						writeText: vi.fn().mockRejectedValue(new Error("Clipboard denied")),
+					},
+				},
+				writable: true,
+				configurable: true,
+			});
+
+			await plugin.backupVault();
+
+			const notice = noticeLog.find(
+				(n: NoticeRecord) =>
+					n.message.includes("Backup created") &&
+					n.message.includes("https://github.com/owner/repo/releases/tag/backup-test"),
+			);
+			expect(notice).toBeDefined();
+		});
+
+		it("backupVault does not create release when confirmation is cancelled", async () => {
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "note.md";
+			file.extension = "md";
+			file.stat = { size: 100, ctime: 0, mtime: 0 };
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([file]);
+
+			plugin.confirmBackup = vi.fn().mockResolvedValue(false);
+
+			await plugin.backupVault();
+
+			expect(mockCreateRelease).not.toHaveBeenCalled();
+		});
+
+		it("restoreFromBackup downloads ZIP and restores files to vault", async () => {
+			const { processZipEntries } = await import("./utils/zip");
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			// Mock processZipEntries to invoke callback with test files
+			vi.mocked(processZipEntries).mockImplementationOnce(async (_buf, onEntry) => {
+				await onEntry("existing.md", new Uint8Array([1, 2, 3]));
+				await onEntry("subdir/new.md", new Uint8Array([4, 5, 6]));
+				return 2;
+			});
+
+			// Mock vault methods for restore
+			const { TFile: TFileClass } = await import("obsidian");
+			const existingFile = new TFileClass();
+			existingFile.path = "existing.md";
+
+			vault.getFileByPath = vi.fn().mockImplementation((path: string) => {
+				if (path === "existing.md") return existingFile;
+				return null;
+			});
+			vault.getFolderByPath = vi.fn().mockReturnValue(null);
+			vault.modifyBinary = vi.fn().mockResolvedValue(undefined);
+			vault.createBinary = vi.fn().mockResolvedValue(new TFileClass());
+			vault.createFolder = vi.fn().mockResolvedValue(undefined);
+
+			const backup = {
+				id: 1,
+				tagName: "backup-2026-01-01-120000",
+				name: "Vault Backup",
+				createdAt: "2026-01-01T12:00:00Z",
+				htmlUrl: "https://github.com/owner/repo/releases/tag/backup-2026",
+				assetName: "vault-backup.zip",
+				assetSize: 2048,
+				assetDownloadUrl:
+					"https://github.com/owner/repo/releases/download/backup-2026/vault-backup.zip",
+			};
+
+			await (plugin as AnyPlugin).restoreFromBackup(backup);
+
+			expect(mockDownloadReleaseAsset).toHaveBeenCalledWith(backup.assetDownloadUrl);
+			expect(vault.modifyBinary).toHaveBeenCalledTimes(1);
+			expect(vault.createFolder).toHaveBeenCalledWith("subdir");
+			expect(vault.createBinary).toHaveBeenCalledTimes(1);
+
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Restored 2 files"));
+			expect(notice).toBeDefined();
 		});
 	});
 });

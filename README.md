@@ -52,6 +52,7 @@ If you want simple, reliable vault backup to GitHub that works the same on every
 - **Incremental sync** — uses GitHub Compare API for efficient change detection (only fetches delta, not full tree)
 - **ETag caching** — conditional requests on polling (304 Not Modified = free, no rate limit cost)
 - **Share as Gist** — share any note as a GitHub Gist (public or secret) with one click. Manage shared gists: copy URL, update content, or delete. Ribbon button + context menu + command palette.
+- **Vault Backup** — create full vault snapshots as ZIP archives stored in GitHub Releases. Restore from any backup with one click, or download the ZIP manually from GitHub.
 - **Sync status panel** — dedicated sidebar panel showing per-file sync status: conflicts, pending changes, untracked and synced files
 - **Parallel operations** — file downloads and hash computation run with controlled concurrency
 - **Crash recovery** — pending changes are persisted to disk and restored after restart
@@ -136,6 +137,16 @@ Share any markdown note as a GitHub Gist. Access via ribbon icon, right-click co
 Choose public or secret visibility, add a description, and the URL is copied to your clipboard. Manage all shared gists via the list icon (☰) in the ribbon — copy URL, update content, or delete.
 
 > Requires `Gists: Read and Write` in your PAT's **Account permissions**. If missing, you'll see a helpful message.
+
+### Vault Backup
+
+Create a full snapshot of your vault as a ZIP archive, stored as a GitHub Release:
+
+- **Backup**: click the archive icon in the ribbon, or use `Ctrl/Cmd+P` → "GHVault: Backup vault"
+- **Restore**: open the backup manager (history icon in ribbon, or `Ctrl/Cmd+P` → "GHVault: Manage backups"), select a backup, and click "Restore"
+- **Manual restore**: download the ZIP directly from the [Releases](https://github.com/nyxene/obsidian-ghvault/releases) page on GitHub and extract into your vault
+
+Each backup is tagged with a UTC timestamp (`backup-YYYY-MM-DD-HHmmss`) and includes all vault files except excluded paths. Maximum vault size for backup: 500MB.
 
 ### File history
 
@@ -269,6 +280,7 @@ src/
     conflict-modal.ts      # Conflict resolution modal with diff view
     diff.ts                # Line-based diff algorithm (LCS)
     file-history-modal.ts  # File commit history modal
+    backup-modal.ts        # Vault backup manager modal
     gist-modal.ts          # Share as Gist creation/update modal
     gist-manager-modal.ts  # Manage shared gists modal
     sync-status-view.ts    # Sidebar panel with per-file sync status
