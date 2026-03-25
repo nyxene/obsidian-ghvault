@@ -19,11 +19,16 @@ interface FakeEl {
 	children: FakeEl[];
 	empty(): void;
 	addClass(cls: string): void;
-	createEl(tag: string, opts?: { cls?: string; text?: string }): FakeEl;
+	createEl(
+		tag: string,
+		opts?: { cls?: string; text?: string; href?: string; attr?: Record<string, string> },
+	): FakeEl;
+	createSpan(opts?: { cls?: string; text?: string }): FakeEl;
 	setText(text: string): void;
 	querySelector(selector: string): FakeEl | null;
 	appendChild(child: FakeEl): void;
 	addEventListener(event: string, handler: () => void): void;
+	toggle(show: boolean): void;
 	/** Test helper: trigger a DOM event */
 	simulateEvent(event: string): void;
 }
@@ -44,12 +49,18 @@ function createFakeEl(tag: string): FakeEl {
 		addClass(cls: string) {
 			this.className = this.className ? `${this.className} ${cls}` : cls;
 		},
-		createEl(t: string, opts?: { cls?: string; text?: string }): FakeEl {
+		createEl(
+			t: string,
+			opts?: { cls?: string; text?: string; href?: string; attr?: Record<string, string> },
+		): FakeEl {
 			const child = createFakeEl(t);
 			if (opts?.cls) child.className = opts.cls;
 			if (opts?.text) child.textContent = opts.text;
 			this.children.push(child);
 			return child;
+		},
+		createSpan(opts?: { cls?: string; text?: string }): FakeEl {
+			return this.createEl("span", opts);
 		},
 		setText(text: string) {
 			this.textContent = text;
@@ -64,6 +75,9 @@ function createFakeEl(tag: string): FakeEl {
 		},
 		appendChild(child: FakeEl) {
 			this.children.push(child);
+		},
+		toggle(_show: boolean) {
+			// no-op in tests
 		},
 		addEventListener(event: string, handler: () => void) {
 			const handlers = eventHandlers.get(event) ?? [];
@@ -335,6 +349,42 @@ export class Setting {
 		const text = new TextComponent();
 		cb(text);
 		this.textComponents.push(text);
+		return this;
+	}
+}
+
+export class SettingGroup {
+	private _heading = "";
+	private _containerEl: unknown;
+
+	constructor(containerEl: unknown) {
+		this._containerEl = containerEl;
+	}
+
+	setHeading(text: string): this {
+		this._heading = text;
+		return this;
+	}
+
+	getHeading(): string {
+		return this._heading;
+	}
+
+	addClass(_cls: string): this {
+		return this;
+	}
+
+	addSetting(cb: (setting: Setting) => void): this {
+		const setting = new Setting(this._containerEl);
+		cb(setting);
+		return this;
+	}
+
+	addExtraButton(_cb: unknown): this {
+		return this;
+	}
+
+	addSearch(_cb: unknown): this {
 		return this;
 	}
 }

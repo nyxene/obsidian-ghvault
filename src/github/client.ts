@@ -436,6 +436,34 @@ export class GitHubClient {
 		return response.arrayBuffer;
 	}
 
+	async triggerDispatch(eventType: string, clientPayload?: Record<string, unknown>): Promise<void> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const url = `${BASE_URL}/repos/${owner}/${repo}/dispatches`;
+
+		this.rateLimiter.assertCanMakeRequest("rest");
+		this.logger.debug("GitHub REST triggerDispatch", { eventType });
+
+		try {
+			const response = await requestWithTimeout({
+				url,
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+				body: JSON.stringify({
+					event_type: eventType,
+					...(clientPayload ? { client_payload: clientPayload } : {}),
+				}),
+			});
+			this.rateLimiter.updateFromHeaders(response.headers);
+		} catch (error: unknown) {
+			throw this.handleRequestError(error, `/repos/${owner}/${repo}/dispatches`);
+		}
+	}
+
 	async createBlob(base64Content: string): Promise<string> {
 		const owner = encodeURIComponent(this.owner);
 		const repo = encodeURIComponent(this.repo);

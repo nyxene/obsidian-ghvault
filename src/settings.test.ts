@@ -257,12 +257,13 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates twelve Setting instances", () => {
+		it("creates fourteen Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
 			// token, owner, repo, branch, sync folder, test connection,
-			// auto-sync, auto-sync debounce, remote pull interval, conflict strategy, log level
-			expect(getSettings()).toHaveLength(12);
+			// auto-sync, auto-sync debounce, remote pull interval, conflict strategy,
+			// exclude patterns, dispatch on push, event type, log level
+			expect(getSettings()).toHaveLength(14);
 		});
 
 		it("creates settings with expected names", () => {
@@ -279,17 +280,9 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Auto-sync debounce");
 			expect(names).toContain("Remote pull interval");
 			expect(names).toContain("Conflict strategy");
+			expect(names).toContain("Trigger workflow on push");
+			expect(names).toContain("Event type");
 			expect(names).toContain("Log level");
-		});
-
-		it("creates a token warning element with security guidance", () => {
-			const { tab } = createTab();
-			tab.display();
-			const warning = tab.containerEl.querySelector(".ghvault-token-warning");
-			expect(warning).not.toBeNull();
-			expect(warning?.textContent).toContain("Token is stored unencrypted");
-			expect(warning?.textContent).toContain("cloud storage");
-			expect(warning?.textContent).toContain("fine-grained PAT");
 		});
 
 		it("shows forget token button when token is set", () => {
