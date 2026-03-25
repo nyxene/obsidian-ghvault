@@ -1,5 +1,11 @@
 import type { RequestUrlResponse } from "obsidian";
-import type { FileCommitInfo, GitHubRef, GitHubRepoInfo, GitHubTreeEntry } from "../types";
+import type {
+	BackupRecord,
+	FileCommitInfo,
+	GitHubRef,
+	GitHubRepoInfo,
+	GitHubTreeEntry,
+} from "../types";
 import {
 	GitHubAuthError,
 	GitHubConflictError,
@@ -296,6 +302,140 @@ export class GitHubClient {
 		}
 	}
 
+	async createRelease(options: {
+		tagName: string;
+		name: string;
+		body: string;
+	}): Promise<{ id: number; htmlUrl: string; uploadUrl: string }> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const data = await this.post<{ id: number; html_url: string; upload_url: string }>(
+			`/repos/${owner}/${repo}/releases`,
+			{
+				tag_name: options.tagName,
+				name: options.name,
+				body: options.body,
+			},
+		);
+		if (
+			typeof data.id !== "number" ||
+			typeof data.html_url !== "string" ||
+			typeof data.upload_url !== "string"
+		) {
+			throw new Error("Invalid release response from GitHub API");
+		}
+		return { id: data.id, htmlUrl: data.html_url, uploadUrl: data.upload_url };
+	}
+
+	async uploadReleaseAsset(
+		uploadUrl: string,
+		filename: string,
+		data: ArrayBuffer,
+	): Promise<{ downloadUrl: string; size: number }> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+		// Strip {?name,label} template from upload URL and append filename
+		const cleanUrl = uploadUrl.replace(/\{[^}]*\}/, "");
+		const url = `${cleanUrl}?name=${encodeURIComponent(filename)}`;
+		this.logger.debug("GitHub REST uploadReleaseAsset", { url, size: data.byteLength });
+
+		const response = await requestWithTimeout(
+			{
+				url,
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"Content-Type": "application/zip",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+				body: data,
+			},
+			120_000,
+		);
+		this.rateLimiter.updateFromHeaders(response.headers);
+		const json = response.json as { browser_download_url: string; size: number };
+		return { downloadUrl: json.browser_download_url, size: json.size };
+	}
+
+	async listReleases(perPage = 30): Promise<BackupRecord[]> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const data = await this.request<
+			Array<{
+				id: number;
+				tag_name: string;
+				name: string;
+				created_at: string;
+				html_url: string;
+				assets: Array<{
+					name: string;
+					size: number;
+					browser_download_url: string;
+				}>;
+			}>
+		>(`/repos/${owner}/${repo}/releases?per_page=${perPage}`);
+
+		if (!Array.isArray(data)) {
+			throw new Error("Invalid releases response from GitHub API");
+		}
+
+		return data
+			.filter((r) => r.tag_name.startsWith("backup-"))
+			.map((r) => ({
+				id: r.id,
+				tagName: r.tag_name,
+				name: r.name ?? r.tag_name,
+				createdAt: r.created_at,
+				htmlUrl: r.html_url,
+				assetName: r.assets[0]?.name ?? "",
+				assetSize: r.assets[0]?.size ?? 0,
+				assetDownloadUrl: r.assets[0]?.browser_download_url ?? "",
+			}));
+	}
+
+	async deleteRelease(releaseId: number): Promise<void> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const url = `${BASE_URL}/repos/${owner}/${repo}/releases/${releaseId}`;
+		this.logger.debug("GitHub REST deleteRelease", { releaseId });
+		try {
+			const response = await requestWithTimeout({
+				url,
+				method: "DELETE",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+			});
+			this.rateLimiter.updateFromHeaders(response.headers);
+		} catch (error: unknown) {
+			const status = (error as { status?: number }).status;
+			if (status === 404) return; // Already deleted
+			throw this.handleRequestError(error, `/releases/${releaseId}`);
+		}
+	}
+
+	async downloadReleaseAsset(downloadUrl: string): Promise<ArrayBuffer> {
+		this.rateLimiter.assertCanMakeRequest("rest");
+		this.logger.debug("GitHub REST downloadReleaseAsset", { url: downloadUrl });
+		const response = await requestWithTimeout(
+			{
+				url: downloadUrl,
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/octet-stream",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+			},
+			120_000,
+		);
+		this.rateLimiter.updateFromHeaders(response.headers);
+		return response.arrayBuffer;
+	}
+
 	async createBlob(base64Content: string): Promise<string> {
 		const owner = encodeURIComponent(this.owner);
 		const repo = encodeURIComponent(this.repo);
@@ -421,25 +561,31 @@ export class GitHubClient {
 
 		let response: RequestUrlResponse;
 		try {
+			// Use throw: false so Obsidian returns the response object for ALL status codes
+			// including 304 Not Modified. Without this, Obsidian throws an error for 304
+			// with an inconsistent error object (missing .status), breaking ETag caching.
 			response = await requestWithTimeout({
 				url,
 				method: "GET",
 				headers,
+				throw: false,
 			});
 		} catch (error: unknown) {
-			const status = (error as { status?: number }).status;
-			if (status === 304 && cached) {
-				this.logger.debug("GitHub REST 304 Not Modified (ETag hit)", { url });
-				const errorHeaders = (error as { headers?: Record<string, string> }).headers;
-				if (errorHeaders) {
-					this.rateLimiter.updateFromHeaders(errorHeaders);
-				}
-				return cached.data as T;
-			}
 			throw this.handleRequestError(error, path);
 		}
 
 		this.rateLimiter.updateFromHeaders(response.headers);
+
+		// Handle 304 Not Modified — return cached data (ETag hit, free API call)
+		if (response.status === 304 && cached) {
+			this.logger.debug("GitHub REST 304 Not Modified (ETag hit)", { url });
+			return cached.data as T;
+		}
+
+		// Handle error status codes
+		if (response.status >= 400) {
+			throw this.handleRequestError({ status: response.status, headers: response.headers }, path);
+		}
 
 		const etag = response.headers.etag ?? response.headers.ETag;
 		if (etag) {

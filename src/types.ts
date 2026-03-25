@@ -102,6 +102,17 @@ export interface FileCommitInfo {
 	htmlUrl: string;
 }
 
+export interface BackupRecord {
+	id: number;
+	tagName: string;
+	name: string;
+	createdAt: string;
+	htmlUrl: string;
+	assetName: string;
+	assetSize: number;
+	assetDownloadUrl: string;
+}
+
 // ---------------------------------------------------------------------------
 // GitHub API types
 // ---------------------------------------------------------------------------

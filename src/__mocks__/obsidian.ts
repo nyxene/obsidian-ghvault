@@ -94,6 +94,17 @@ function findByClass(el: FakeEl, cls: string): FakeEl | null {
 
 export const requestUrl = vi.fn();
 
+export class Modal {
+	app: unknown;
+	contentEl = createFakeEl("div");
+	constructor(app: unknown) {
+		this.app = app;
+	}
+	open(): void {}
+	close(): void {}
+	onClose(): void {}
+}
+
 export class Plugin {
 	app = {};
 	manifest = {};
