@@ -5,6 +5,7 @@ import type {
 	GitHubRef,
 	GitHubRepoInfo,
 	GitHubTreeEntry,
+	PagesConfig,
 } from "../types";
 import {
 	GitHubAuthError,
@@ -23,6 +24,11 @@ const API_VERSION = "2022-11-28";
 
 const VALID_COMPARE_STATUSES = new Set(["ahead", "behind", "diverged", "identical"]);
 const VALID_FILE_STATUSES = new Set(["added", "modified", "removed", "renamed"]);
+const VALID_BUILD_TYPES = new Set<string>(["workflow", "legacy"]);
+
+function parseBuildType(value: string): "workflow" | "legacy" {
+	return VALID_BUILD_TYPES.has(value) ? (value as "workflow" | "legacy") : "workflow";
+}
 
 export interface GitHubClientOptions {
 	token: string;
@@ -461,6 +467,118 @@ export class GitHubClient {
 			this.rateLimiter.updateFromHeaders(response.headers);
 		} catch (error: unknown) {
 			throw this.handleRequestError(error, `/repos/${owner}/${repo}/dispatches`);
+		}
+	}
+
+	async getPagesConfig(): Promise<PagesConfig | null> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		try {
+			const data = await this.request<{
+				html_url: string;
+				source: { branch: string; path: string };
+				build_type: string;
+				https_enforced: boolean;
+			}>(`/repos/${owner}/${repo}/pages`);
+			return {
+				htmlUrl: data.html_url,
+				source: data.source,
+				buildType: parseBuildType(data.build_type),
+				httpsEnforced: data.https_enforced,
+			};
+		} catch (error: unknown) {
+			if (error instanceof GitHubNotFoundError) return null;
+			throw error;
+		}
+	}
+
+	async createOrUpdateFile(
+		path: string,
+		content: string,
+		message: string,
+		branch: string,
+	): Promise<void> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const encodedPath = encodePath(path);
+
+		// GET checks rate limit via this.request(); PUT checks separately below
+		let existingSha: string | undefined;
+		try {
+			const existing = await this.request<{ sha: string }>(
+				`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(branch)}`,
+			);
+			existingSha = existing.sha;
+		} catch (error: unknown) {
+			if (!(error instanceof GitHubNotFoundError)) throw error;
+		}
+
+		const body: Record<string, string> = {
+			message,
+			content: toBase64(content),
+			branch,
+		};
+		if (existingSha) {
+			body.sha = existingSha;
+		}
+
+		this.rateLimiter.assertCanMakeRequest("rest");
+		const url = `${BASE_URL}/repos/${owner}/${repo}/contents/${encodedPath}`;
+		this.logger.debug("GitHub REST createOrUpdateFile", { path, branch, update: !!existingSha });
+
+		try {
+			const response = await requestWithTimeout({
+				url,
+				method: "PUT",
+				contentType: "application/json",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+				body: JSON.stringify(body),
+			});
+			this.rateLimiter.updateFromHeaders(response.headers);
+		} catch (error: unknown) {
+			throw this.handleRequestError(error, path);
+		}
+	}
+
+	async deleteFile(path: string, message: string, branch: string): Promise<void> {
+		const owner = encodeURIComponent(this.owner);
+		const repo = encodeURIComponent(this.repo);
+		const encodedPath = encodePath(path);
+
+		let sha: string;
+		try {
+			const existing = await this.request<{ sha: string }>(
+				`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(branch)}`,
+			);
+			sha = existing.sha;
+		} catch (error: unknown) {
+			if (error instanceof GitHubNotFoundError) return; // Already deleted
+			throw error;
+		}
+
+		this.rateLimiter.assertCanMakeRequest("rest");
+		const url = `${BASE_URL}/repos/${owner}/${repo}/contents/${encodedPath}`;
+		this.logger.debug("GitHub REST deleteFile", { path, branch });
+
+		try {
+			const response = await requestWithTimeout({
+				url,
+				method: "DELETE",
+				contentType: "application/json",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": API_VERSION,
+				},
+				body: JSON.stringify({ message, sha, branch }),
+			});
+			this.rateLimiter.updateFromHeaders(response.headers);
+		} catch (error: unknown) {
+			throw this.handleRequestError(error, path);
 		}
 	}
 

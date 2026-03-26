@@ -12,7 +12,7 @@
 Every unit of work follows this chain. No exceptions, no shortcuts. The issue number `#N` is the universal anchor — it appears in every artifact.
 
 ```
-logbook: issue → plan → spec → branch → implement → checks → report → "вливай" → PR → merge
+logbook: issue → plan → spec → branch → implement → checks → qa/review → report → "вливай" → PR → merge
 ```
 
 ### Traceability Chain
@@ -191,7 +191,33 @@ All four must pass. If any fail — fix first, then report.
 
 ---
 
-## Step 6: Report
+## Step 6: QA & Review Gate
+
+After local checks pass but BEFORE reporting to the Aronnax, Nemo runs two automated audits and fixes all findings:
+
+### 6.1 QA Audit
+
+```
+/qa --changed
+```
+
+Analyzes changed files for: coverage gaps, test quality, performance concerns. Nemo MUST fix all P1 (blocker) and P2 (should fix) findings before proceeding. P3 findings are optional.
+
+### 6.2 Code Review
+
+```
+/review
+```
+
+Reviews the diff for: logic errors, security issues, code style, missing edge cases. Nemo MUST address all findings before proceeding.
+
+### Iterate Until Clean
+
+If fixes introduce new code, re-run local checks (Step 5) and repeat QA/Review until both pass clean. Only then proceed to Step 7.
+
+---
+
+## Step 7: Report
 
 Code is written but NOT committed until the Aronnax has inspected. All hands report before anchoring.
 
@@ -209,15 +235,15 @@ No commits are created at this point. The code sits unstaged.
 
 ---
 
-## Step 7: The Aronnax Reviews
+## Step 8: The Aronnax Reviews
 
 The Aronnax inspects all changed files manually. The Aronnax may:
 - Request changes → Nemo fixes, re-runs checks, reports again
-- Approve → proceed to Step 8
+- Approve → proceed to Step 9
 
 ---
 
-## Step 8: "вливай"
+## Step 9: "вливай"
 
 Only after explicit approval from the Aronnax, Nemo:
 
@@ -233,7 +259,7 @@ Only after explicit approval from the Aronnax, Nemo:
 
 ---
 
-## Step 9: The Aronnax Merges
+## Step 10: The Aronnax Merges
 
 The Aronnax merges the PR manually. Nemo does NOT merge PRs.
 
@@ -254,10 +280,11 @@ After merge, Nemo proposes what to work on next based on:
 | 3. Branch | `feat/N-<slug>` | Nemo creates |
 | 4. Implement | code on feature branch | Nemo |
 | 5. Checks | lint, type-check, test, build | Nemo |
-| 6. Report | summary in conversation | Nemo |
-| 7. Review | file inspection | the Aronnax |
-| 8. "вливай" | commit + push + PR | Nemo |
-| 9. Merge | PR merge | the Aronnax |
+| 6. QA & Review | `/qa --changed` + `/review`, fix all findings | Nemo |
+| 7. Report | summary in conversation | Nemo |
+| 8. Review | file inspection | the Aronnax |
+| 9. "вливай" | commit + push + PR | Nemo |
+| 10. Merge | PR merge | the Aronnax |
 
 ---
 

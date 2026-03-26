@@ -1180,3 +1180,125 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 **Steps:**
 1. Click "Backup vault" with files of various sizes
 **Expected:** Confirmation dialog shows correct file count and size (KB for small, MB for large).
+
+## Group J: Repository Dispatch
+
+### TC-DISPATCH-001: Dispatch fires after successful push
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Token with Contents R/W, repo with a workflow listening for `repository_dispatch: types: [vault-synced]`
+**Steps:**
+1. Enable "Trigger workflow on push" in settings
+2. Set event type to "vault-synced"
+3. Create or modify a note
+4. Run GHVault: Sync
+**Expected:** Push succeeds, no error notice. Repo → Actions tab shows workflow triggered by `repository_dispatch`.
+
+### TC-DISPATCH-002: Dispatch failure does not block sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Dispatch enabled, but token lacks permissions or event type is invalid
+**Steps:**
+1. Enable dispatch with an event type that has no matching workflow
+2. Modify a note and sync
+**Expected:** Sync completes successfully. Notice says "Synced — N pulled, N pushed". Log shows "Repository dispatch failed" warning but no error notice.
+
+### TC-DISPATCH-003: Event type field hidden when toggle is off
+**Priority:** P2
+**Platform:** Both
+**Preconditions:** Plugin configured
+**Steps:**
+1. Open settings → Integrations
+2. Verify "Event type" field is hidden when toggle is off
+3. Turn on "Trigger workflow on push"
+**Expected:** Event type field appears. Default value: "vault-synced".
+
+### TC-DISPATCH-004: Dispatch sends correct payload
+**Priority:** P2
+**Platform:** Desktop
+**Preconditions:** Dispatch enabled, workflow that logs `github.event.client_payload`
+**Steps:**
+1. Push a file via sync
+2. Check workflow run logs for payload
+**Expected:** Payload contains `branch`, `pushed` (array of pushed file paths), `deleted` (array), `commitOid` (SHA string).
+
+## Group K: GitHub Pages Publishing
+
+### TC-PAGES-001: Publishing settings appear when toggle enabled
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Plugin configured
+**Steps:**
+1. Open settings → Publishing
+2. Turn on "Publish to GitHub Pages"
+**Expected:** SSG dropdown, "Generate workflow" button, and "Enable GitHub Pages" link appear. Dispatch toggle in Integrations is auto-enabled.
+
+### TC-PAGES-002: Generate workflow creates file in repo
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Publishing enabled, SSG set to Quartz, valid token with Contents R/W
+**Steps:**
+1. Click "Generate" button
+2. Wait for "Done ✓"
+3. Check repo on GitHub → `.github/workflows/deploy.yml`
+**Expected:** File exists with Quartz build steps, `repository_dispatch` trigger, and `ghvault-publish: false` exclusion step.
+
+### TC-PAGES-003: Generate workflow for each SSG
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Publishing enabled
+**Steps:**
+1. Select Quartz → Generate → verify workflow mentions `npx quartz build`
+2. Select MkDocs → Generate → verify workflow mentions `mkdocs build`
+3. Select Hugo → Generate → verify workflow mentions `hugo --minify`
+4. Select Jekyll → verify Generate button is hidden
+**Expected:** Each SSG produces correct workflow. Jekyll shows no Generate button.
+
+### TC-PAGES-004: Enable GitHub Pages link opens repo settings
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Publishing enabled, owner and repo configured
+**Steps:**
+1. Open settings → Publishing → "Enable GitHub Pages"
+2. Click "Open repo settings →" link
+**Expected:** Browser opens `https://github.com/{owner}/{repo}/settings/pages`. User can manually set Source to "GitHub Actions".
+
+### TC-PAGES-006: Generate workflow overwrites existing file
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** `.github/workflows/deploy.yml` already exists in repo
+**Steps:**
+1. Change SSG from Quartz to Hugo
+2. Click "Generate"
+**Expected:** Existing file is overwritten with Hugo template. No 409 conflict error.
+
+### TC-PAGES-007: ghvault-publish: false excludes note from build
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Pages publishing active, site building successfully
+**Steps:**
+1. Create a note with `ghvault-publish: false` in frontmatter
+2. Sync → wait for workflow to build
+3. Check published site
+**Expected:** Note content does not appear on the site. File exists in repo but is excluded during build.
+
+### TC-PAGES-008: Full publish flow — edit to live site
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Pages enabled, workflow generated, dispatch enabled
+**Steps:**
+1. Create a new note "Hello World"
+2. Run GHVault: Sync
+3. Wait for Actions workflow to complete
+4. Visit the Pages URL
+**Expected:** Note appears on the published site within a few minutes.
+
+### TC-PAGES-009: Jekyll uses legacy build (no workflow)
+**Priority:** P2
+**Platform:** Both
+**Preconditions:** Publishing enabled, SSG set to Jekyll
+**Steps:**
+1. Select Jekyll as SSG
+2. Verify Generate button is hidden
+3. Click "Enable" for Pages
+**Expected:** Pages enabled with `build_type: "legacy"`. GitHub auto-builds with Jekyll. No workflow file needed.

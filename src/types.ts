@@ -16,6 +16,10 @@ export interface GHVaultSettings {
 	excludePatterns: string;
 	dispatchOnPush: boolean;
 	dispatchEventType: string;
+	pagesEnabled: boolean;
+	pagesGenerator: PagesGenerator;
+	pagesUrl: string;
+	publishDebounce: number;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -23,6 +27,21 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export const VALID_LOG_LEVELS: ReadonlyArray<LogLevel> = ["debug", "info", "warn", "error"];
 
 export type ConflictStrategy = "skip" | "local-wins" | "remote-wins" | "ask";
+
+export type PagesGenerator = "quartz" | "mkdocs" | "starlight";
+
+export const VALID_PAGES_GENERATORS: ReadonlyArray<PagesGenerator> = [
+	"quartz",
+	"mkdocs",
+	"starlight",
+];
+
+export interface PagesConfig {
+	htmlUrl: string;
+	source: { branch: string; path: string };
+	buildType: "workflow" | "legacy";
+	httpsEnforced: boolean;
+}
 
 export const VALID_CONFLICT_STRATEGIES: ReadonlyArray<ConflictStrategy> = [
 	"skip",
@@ -224,4 +243,8 @@ export const DEFAULT_SETTINGS: GHVaultSettings = {
 	excludePatterns: "",
 	dispatchOnPush: false,
 	dispatchEventType: "vault-synced",
+	pagesEnabled: false,
+	pagesGenerator: "quartz",
+	pagesUrl: "",
+	publishDebounce: 600,
 };
