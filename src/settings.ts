@@ -1,6 +1,13 @@
-import { type App, type Plugin, PluginSettingTab, type Setting, SettingGroup } from "obsidian";
-import type { ConflictStrategy, GHVaultSettings, LogLevel } from "./types";
-import { VALID_CONFLICT_STRATEGIES, VALID_LOG_LEVELS } from "./types";
+import {
+	type App,
+	Notice,
+	type Plugin,
+	PluginSettingTab,
+	type Setting,
+	SettingGroup,
+} from "obsidian";
+import type { ConflictStrategy, GHVaultSettings, LogLevel, PagesGenerator } from "./types";
+import { VALID_CONFLICT_STRATEGIES, VALID_LOG_LEVELS, VALID_PAGES_GENERATORS } from "./types";
 import { isValidExcludePattern, normalizePath } from "./utils/path";
 
 const GUIDE_BASE = "https://github.com/nyxene/obsidian-ghvault/blob/main/docs/guide";
@@ -151,6 +158,7 @@ function validateExcludePatterns(rawValue: string): {
 export interface SettingTabCallbacks {
 	onSave: (settings: GHVaultSettings) => Promise<void>;
 	onTestConnection: () => Promise<void>;
+	onGenerateWorkflow: () => Promise<void>;
 }
 
 export class GHVaultSettingTab extends PluginSettingTab {
@@ -175,7 +183,7 @@ export class GHVaultSettingTab extends PluginSettingTab {
 		connectionGroup.addSetting((setting) => {
 			setting.setName("GitHub token");
 			setting.descEl.createSpan({
-				text: "Fine-grained PAT with Contents (Read/Write) and Metadata (Read) permissions.",
+				text: "Fine-grained PAT. Required: Contents (R/W). Optional: Workflows, Gists (R/W).",
 			});
 			setting.descEl.createEl("br");
 			setting.descEl.createEl("a", {
@@ -407,6 +415,118 @@ export class GHVaultSettingTab extends PluginSettingTab {
 						await this.callbacks.onSave(this.settings);
 					}),
 			);
+		});
+
+		// ── Publishing ──────────────────────────────────────────────────
+		let ssgSetting: Setting | null = null;
+		let workflowSetting: Setting | null = null;
+
+		const publishingGroup = new SettingGroup(containerEl);
+		publishingGroup.setHeading("Publishing");
+
+		publishingGroup.addSetting((setting) => {
+			setting.setName("Publish to GitHub Pages");
+			setting.descEl.createSpan({
+				text: "Build a website from your vault using a static site generator.",
+			});
+			setting.descEl.createEl("br");
+			setting.descEl.createEl("a", {
+				text: "Setup guide",
+				href: `${GUIDE_BASE}/publishing.md`,
+			});
+			setting.descEl.createSpan({ text: "  \u00b7  " });
+			setting.descEl.createEl("a", {
+				text: "Enable Pages in repo settings",
+				href: `https://github.com/${this.settings.owner}/${this.settings.repo}/settings/pages`,
+			});
+			setting.addToggle((toggle) =>
+				toggle.setValue(this.settings.pagesEnabled).onChange(async (value) => {
+					this.settings.pagesEnabled = value;
+					ssgSetting?.settingEl.toggle(value);
+					workflowSetting?.settingEl.toggle(value);
+					if (value && !this.settings.dispatchOnPush) {
+						this.settings.dispatchOnPush = true;
+						if (!this.settings.dispatchEventType) {
+							this.settings.dispatchEventType = "vault-synced";
+						}
+					}
+					await this.callbacks.onSave(this.settings);
+				}),
+			);
+		});
+
+		publishingGroup.addSetting((setting) => {
+			ssgSetting = setting;
+			setting.setName("Static site generator");
+			setting.setDesc("Choose which SSG builds your site");
+			setting.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({
+						quartz: "Quartz",
+						mkdocs: "MkDocs Material",
+						starlight: "Astro Starlight",
+					})
+					.setValue(this.settings.pagesGenerator)
+					.onChange(async (value) => {
+						if (VALID_PAGES_GENERATORS.includes(value as PagesGenerator)) {
+							this.settings.pagesGenerator = value as PagesGenerator;
+							await this.callbacks.onSave(this.settings);
+							this.display();
+						}
+					}),
+			);
+			setting.settingEl.toggle(this.settings.pagesEnabled);
+		});
+
+		publishingGroup.addSetting((setting) => {
+			workflowSetting = setting;
+			setting.setName("Deploy");
+			setting.descEl.createSpan({
+				text: "First deploy takes 1\u20132 min.",
+			});
+			if (this.settings.pagesUrl) {
+				setting.descEl.createEl("br");
+				setting.descEl.createEl("a", {
+					text: this.settings.pagesUrl,
+					href: this.settings.pagesUrl,
+				});
+			}
+			setting.addButton((button) => {
+				button.setButtonText("Deploy").setCta();
+				button.onClick(async () => {
+					button.setButtonText("Deploying...");
+					button.setDisabled(true);
+					try {
+						await this.callbacks.onGenerateWorkflow();
+						button.setButtonText("Done \u2713");
+						setTimeout(() => this.display(), 2000);
+					} catch (err: unknown) {
+						const msg = err instanceof Error ? err.message : String(err);
+						new Notice(`GHVault: Deploy failed \u2014 ${msg}`, 10000);
+						button.setButtonText("Deploy");
+						button.setDisabled(false);
+					}
+				});
+			});
+			setting.settingEl.toggle(this.settings.pagesEnabled);
+		});
+
+		publishingGroup.addSetting((setting) => {
+			setting.setName("Publish interval");
+			setting.setDesc("Minutes between deploys (default: 10 min)");
+			setting.addText((text) => {
+				text
+					.setPlaceholder("10")
+					.setValue(String(this.settings.publishDebounce / 60))
+					.onChange(async (value) => {
+						const mins = Number.parseFloat(value);
+						if (!Number.isNaN(mins) && mins >= 0 && mins <= 60) {
+							this.settings.publishDebounce = Math.round(mins * 60);
+							await this.callbacks.onSave(this.settings);
+						}
+					});
+			});
+			setting.settingEl.toggle(this.settings.pagesEnabled);
 		});
 
 		// ── Integrations ────────────────────────────────────────────────

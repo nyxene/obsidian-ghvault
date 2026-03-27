@@ -7,6 +7,7 @@ Welcome to the GHVault documentation. These guides cover setup, configuration, a
 - [Getting Started](getting-started.md) — install, connect, first sync
 - [Settings Reference](settings.md) — all settings explained
 - [Workflow Dispatch](workflow-dispatch.md) — trigger GitHub Actions after sync (publish site, run CI)
+- [Publishing to GitHub Pages](publishing.md) — build a website from your vault
 
 ## Quick links
 

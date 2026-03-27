@@ -18,7 +18,8 @@ Set up GHVault in under 5 minutes.
    - **Contents** — Read and write
    - **Metadata** — Read-only (auto-selected)
 6. (Optional) For [Share as Gist](settings.md#share-as-gist) feature, add **Account permissions → Gists — Read and write**
-7. Click **Generate token** and copy it
+7. (Optional) For [GitHub Pages publishing](publishing.md), add **Repository permissions → Workflows — Read and write**
+8. Click **Generate token** and copy it
 
 > **Security note:** The token is stored unencrypted in your vault's plugin data (`data.json`). Use a fine-grained token with minimal scopes. See [Settings → GitHub token](settings.md#github-token) for details.
 

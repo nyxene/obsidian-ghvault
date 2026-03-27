@@ -1238,4 +1238,256 @@ describe("GitHubClient", () => {
 			expect(spy).toHaveBeenCalledWith("rest");
 		});
 	});
+
+	describe("getPagesConfig", () => {
+		it("returns config when Pages is enabled", async () => {
+			mockResponse({
+				html_url: "https://user.github.io/repo",
+				source: { branch: "main", path: "/" },
+				build_type: "workflow",
+				https_enforced: true,
+			});
+			const result = await createClient().getPagesConfig();
+			expect(result).toEqual({
+				htmlUrl: "https://user.github.io/repo",
+				source: { branch: "main", path: "/" },
+				buildType: "workflow",
+				httpsEnforced: true,
+			});
+		});
+
+		it("falls back to 'workflow' for unknown build_type", async () => {
+			mockResponse({
+				html_url: "https://user.github.io/repo",
+				source: { branch: "main", path: "/" },
+				build_type: "actions_v2",
+				https_enforced: true,
+			});
+			const result = await createClient().getPagesConfig();
+			expect(result?.buildType).toBe("workflow");
+		});
+
+		it("returns null when Pages is not enabled (404)", async () => {
+			mockError(404);
+			const result = await createClient().getPagesConfig();
+			expect(result).toBeNull();
+		});
+
+		it("throws GitHubAuthError on 401", async () => {
+			mockError(401);
+			await expect(createClient().getPagesConfig()).rejects.toThrow(GitHubAuthError);
+		});
+	});
+
+	describe("createOrUpdateFile", () => {
+		it("creates file when it does not exist (404 on GET)", async () => {
+			// First call: GET returns 404, second call: PUT succeeds
+			mockRequest.mockRejectedValueOnce({ status: 404, headers: {} }).mockResolvedValueOnce({
+				json: { content: { sha: "abc" }, commit: { sha: "def" } },
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 201,
+				text: "{}",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await createClient().createOrUpdateFile(
+				".github/workflows/deploy.yml",
+				"content",
+				"add workflow",
+				"main",
+			);
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const putCall = lastCall[0] as { method: string; url: string };
+			expect(putCall.method).toBe("PUT");
+			expect(putCall.url).toContain(".github/workflows/deploy.yml");
+		});
+
+		it("updates file when it exists (GET returns sha)", async () => {
+			// First call: GET returns existing file, second call: PUT with sha
+			mockRequest
+				.mockResolvedValueOnce({
+					json: { sha: "existing-sha" },
+					headers: {
+						"x-ratelimit-limit": "5000",
+						"x-ratelimit-remaining": "4999",
+						"x-ratelimit-reset": "1700000000",
+					},
+					status: 200,
+					text: "{}",
+					arrayBuffer: new ArrayBuffer(0),
+				} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never)
+				.mockResolvedValueOnce({
+					json: { content: { sha: "new" }, commit: { sha: "new-commit" } },
+					headers: {
+						"x-ratelimit-limit": "5000",
+						"x-ratelimit-remaining": "4998",
+						"x-ratelimit-reset": "1700000000",
+					},
+					status: 200,
+					text: "{}",
+					arrayBuffer: new ArrayBuffer(0),
+				} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await createClient().createOrUpdateFile(
+				".github/workflows/deploy.yml",
+				"updated content",
+				"update workflow",
+				"main",
+			);
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const putBody = JSON.parse((lastCall[0] as { body: string }).body);
+			expect(putBody.sha).toBe("existing-sha");
+		});
+
+		it("throws on PUT failure (e.g. 401)", async () => {
+			// First call: GET returns 404 (file doesn't exist), second call: PUT fails with 401
+			mockRequest
+				.mockRejectedValueOnce({ status: 404, headers: {} })
+				.mockRejectedValueOnce({ status: 401, headers: {} });
+
+			await expect(
+				createClient().createOrUpdateFile(
+					".github/workflows/deploy.yml",
+					"content",
+					"add workflow",
+					"main",
+				),
+			).rejects.toThrow(GitHubAuthError);
+		});
+
+		it("throws on non-404 GET error (e.g. 500)", async () => {
+			// First call: GET returns 500 — should propagate, not treat as "file not found"
+			mockRequest.mockRejectedValueOnce({ status: 500, headers: {} });
+
+			await expect(
+				createClient().createOrUpdateFile(
+					".github/workflows/deploy.yml",
+					"content",
+					"add workflow",
+					"main",
+				),
+			).rejects.toThrow();
+		});
+	});
+
+	describe("deleteFile", () => {
+		it("deletes file when GET returns sha", async () => {
+			// First call: GET returns existing file sha, second call: DELETE succeeds
+			mockRequest
+				.mockResolvedValueOnce({
+					json: { sha: "file-sha-to-delete" },
+					headers: {
+						"x-ratelimit-limit": "5000",
+						"x-ratelimit-remaining": "4999",
+						"x-ratelimit-reset": "1700000000",
+					},
+					status: 200,
+					text: "{}",
+					arrayBuffer: new ArrayBuffer(0),
+				} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never)
+				.mockResolvedValueOnce({
+					json: {},
+					headers: {
+						"x-ratelimit-limit": "5000",
+						"x-ratelimit-remaining": "4998",
+						"x-ratelimit-reset": "1700000000",
+					},
+					status: 200,
+					text: "{}",
+					arrayBuffer: new ArrayBuffer(0),
+				} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await createClient().deleteFile("notes/old.md", "remove file", "main");
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const deleteCall = lastCall[0] as { method: string; body: string };
+			expect(deleteCall.method).toBe("DELETE");
+			const body = JSON.parse(deleteCall.body) as Record<string, unknown>;
+			expect(body.sha).toBe("file-sha-to-delete");
+			expect(body.message).toBe("remove file");
+			expect(body.branch).toBe("main");
+		});
+
+		it("silently returns when file is already deleted (404 on GET)", async () => {
+			// GET returns 404 via status code on response (throw: false path)
+			mockRequest.mockResolvedValueOnce({
+				json: {},
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 404,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const callsBefore = mockRequest.mock.calls.length;
+			await createClient().deleteFile("notes/gone.md", "remove file", "main");
+
+			// Only one request should be made (the GET), no DELETE
+			const newCalls = mockRequest.mock.calls.slice(callsBefore);
+			expect(newCalls).toHaveLength(1);
+			const getCall = newCalls[0][0] as { method?: string };
+			expect(getCall.method).toBe("GET");
+		});
+
+		it("throws on non-404 GET error", async () => {
+			// GET returns 500 — should propagate, not treat as "already deleted"
+			mockRequest.mockResolvedValueOnce({
+				json: {},
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 500,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(createClient().deleteFile("notes/file.md", "remove", "main")).rejects.toThrow();
+		});
+
+		it("throws when rate limited before DELETE", async () => {
+			const rateLimiter = new RateLimiter();
+
+			// GET succeeds (request() checks rate limit internally, but we set it AFTER the GET)
+			mockRequest.mockResolvedValueOnce({
+				json: { sha: "file-sha" },
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "0",
+					"x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
+				},
+				status: 200,
+				text: "{}",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			const client = createClient(rateLimiter);
+			// After GET, rate limiter is updated with remaining=0 from response headers.
+			// The deleteFile method then calls rateLimiter.assertCanMakeRequest("rest") before DELETE.
+			await expect(client.deleteFile("notes/file.md", "remove", "main")).rejects.toThrow(
+				GitHubRateLimitError,
+			);
+		});
+	});
+
+	describe("getPagesConfig — legacy build type", () => {
+		it("returns buildType 'legacy' when API responds with legacy", async () => {
+			mockResponse({
+				html_url: "https://user.github.io/repo",
+				source: { branch: "main", path: "/" },
+				build_type: "legacy",
+				https_enforced: false,
+			});
+			const result = await createClient().getPagesConfig();
+			expect(result?.buildType).toBe("legacy");
+		});
+	});
 });

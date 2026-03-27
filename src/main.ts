@@ -2,6 +2,7 @@ import { type EventRef, Modal, Notice, Plugin, TFile, type WorkspaceLeaf } from 
 import { GitHubClient } from "./github/client";
 import { GitHubGraphQL } from "./github/graphql";
 import { RateLimiter } from "./github/rate-limit";
+import { getWorkflowTemplate } from "./publishing/workflow-templates";
 import { GHVaultSettingTab, sanitizeBranch, sanitizeSlug, sanitizeSyncFolder } from "./settings";
 import { ChangeQueue } from "./sync/change-queue";
 import { SyncEngine, type SyncResult } from "./sync/engine";
@@ -19,12 +20,14 @@ import type {
 	GHVaultSettings,
 	GistRecord,
 	LogLevel,
+	PagesGenerator,
 } from "./types";
 import {
 	DEFAULT_SETTINGS,
 	SECRET_PATTERN,
 	VALID_CONFLICT_STRATEGIES,
 	VALID_LOG_LEVELS,
+	VALID_PAGES_GENERATORS,
 } from "./types";
 import { BackupModal, formatSize } from "./ui/backup-modal";
 import { ConflictModal } from "./ui/conflict-modal";
@@ -53,6 +56,7 @@ export default class GHVaultPlugin extends Plugin {
 	private statusBarEl: HTMLElement | null = null;
 	private logger: Logger | null = null;
 	private lastSyncAt = 0;
+	private lastDispatchAt = 0;
 	private lastSuccessfulSyncAt = 0;
 	private statusRefreshInterval: ReturnType<typeof setInterval> | null = null;
 	private changeQueue: ChangeQueue | null = null;
@@ -82,6 +86,7 @@ export default class GHVaultPlugin extends Plugin {
 					this.setupAutoSync();
 				},
 				onTestConnection: () => this.testConnection(),
+				onGenerateWorkflow: () => this.generatePagesWorkflow(),
 			}),
 		);
 
@@ -412,10 +417,19 @@ export default class GHVaultPlugin extends Plugin {
 			}
 
 			if (pushCount > 0 && this.settings.dispatchOnPush && this.settings.dispatchEventType) {
-				this.fireDispatch(result).catch((err: unknown) => {
-					const msg = err instanceof Error ? err.message : String(err);
-					this.logger?.warn("Repository dispatch failed", { error: msg });
-				});
+				const now = Date.now();
+				const debounceMs = this.settings.publishDebounce * 1000;
+				if (now - this.lastDispatchAt >= debounceMs) {
+					this.lastDispatchAt = now;
+					this.fireDispatch(result).catch((err: unknown) => {
+						const msg = err instanceof Error ? err.message : String(err);
+						this.logger?.warn("Repository dispatch failed", { error: msg });
+					});
+				} else {
+					this.logger?.debug("Publish debounce: skipping dispatch", {
+						nextIn: Math.ceil((debounceMs - (now - this.lastDispatchAt)) / 1000),
+					});
+				}
 			}
 
 			this.lastSuccessfulSyncAt = Date.now();
@@ -443,6 +457,45 @@ export default class GHVaultPlugin extends Plugin {
 		this.logger?.info("Repository dispatch triggered", {
 			eventType: this.settings.dispatchEventType,
 		});
+	}
+
+	private async generatePagesWorkflow(): Promise<void> {
+		if (!this.githubClient) throw new Error("Not connected");
+		const template = getWorkflowTemplate(
+			this.settings.pagesGenerator,
+			this.settings.branch,
+			this.settings.syncFolder,
+			this.settings.excludePatterns,
+		);
+		await this.githubClient.createOrUpdateFile(
+			".github/workflows/deploy.yml",
+			template,
+			`ci: add ${this.settings.pagesGenerator} deploy workflow`,
+			this.settings.branch,
+		);
+
+		// Check if Pages is already enabled and cache site URL
+		try {
+			const pages = await this.githubClient.getPagesConfig();
+			if (pages) {
+				this.settings.pagesUrl = pages.htmlUrl;
+				await this.saveSettings();
+			}
+		} catch {
+			// Pages check is best-effort, don't fail workflow generation
+		}
+
+		// Trigger the workflow immediately so it runs on first deploy
+		if (this.settings.dispatchOnPush && this.settings.dispatchEventType) {
+			await this.githubClient.triggerDispatch(this.settings.dispatchEventType, {
+				branch: this.settings.branch,
+				pushed: [".github/workflows/deploy.yml"],
+				deleted: [],
+				commitOid: "",
+			});
+		}
+
+		new Notice("GHVault: Workflow created \u2713");
 	}
 
 	private setupAutoSync(): void {
@@ -985,6 +1038,20 @@ export default class GHVaultPlugin extends Plugin {
 					typeof raw.dispatchEventType === "string" && raw.dispatchEventType.trim()
 						? raw.dispatchEventType.trim()
 						: DEFAULT_SETTINGS.dispatchEventType,
+				pagesEnabled:
+					typeof raw.pagesEnabled === "boolean" ? raw.pagesEnabled : DEFAULT_SETTINGS.pagesEnabled,
+				pagesGenerator:
+					typeof raw.pagesGenerator === "string" &&
+					VALID_PAGES_GENERATORS.includes(raw.pagesGenerator as PagesGenerator)
+						? (raw.pagesGenerator as PagesGenerator)
+						: DEFAULT_SETTINGS.pagesGenerator,
+				pagesUrl: typeof raw.pagesUrl === "string" ? raw.pagesUrl : DEFAULT_SETTINGS.pagesUrl,
+				publishDebounce:
+					typeof raw.publishDebounce === "number" &&
+					raw.publishDebounce >= 0 &&
+					raw.publishDebounce <= 3600
+						? raw.publishDebounce
+						: DEFAULT_SETTINGS.publishDebounce,
 			};
 		}
 	}

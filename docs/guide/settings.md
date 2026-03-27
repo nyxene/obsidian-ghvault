@@ -15,6 +15,7 @@ Your GitHub Personal Access Token (PAT). Use a [fine-grained token](https://gith
 | Contents | Read and write | Yes |
 | Metadata | Read-only | Yes (auto) |
 | Gists | Read and write | Only for Share as Gist |
+| Workflows | Read and write | Only for generating deploy workflow file (publishing) |
 
 The token is stored in your vault's `data.json` file (Obsidian plugin storage). There is no secure keychain API available on all platforms. Mitigations:
 - Use a fine-grained PAT scoped to a single repository
@@ -101,6 +102,66 @@ You can also exclude individual files by adding `ghvault-sync: false` to the fil
 ```yaml
 ---
 ghvault-sync: false
+---
+```
+
+---
+
+## Publishing
+
+### Publish to GitHub Pages
+
+Master toggle for website publishing. When enabled, shows SSG selection and workflow generation controls.
+
+Enabling this automatically turns on "Trigger workflow on push" in Integrations.
+
+Default: **off**. See the [Publishing Guide](publishing.md) for step-by-step setup.
+
+### Static site generator
+
+Choose which SSG builds your website:
+
+| Generator | Best for |
+|-----------|----------|
+| **Quartz** (default) | Obsidian-native digital gardens with wiki-links and backlinks |
+| **MkDocs Material** | Documentation sites |
+| **Astro Starlight** | Documentation sites with modern UI |
+
+### Generate workflow
+
+Creates `.github/workflows/deploy.yml` in your repository. The workflow:
+- Triggers on `repository_dispatch` (after GHVault push) and on direct `push`
+- Excludes notes marked with `ghvault-publish: false`
+- Builds the site with the selected SSG
+- Deploys to GitHub Pages
+
+Not needed for Jekyll (uses GitHub's built-in build).
+
+### Enable GitHub Pages
+
+Shows a direct link to your repository's Pages settings on GitHub. Click it to open the settings page where you set Source to "GitHub Actions". There is no API button — GitHub requires manual enablement.
+
+After Pages is enabled and the first deploy succeeds, a **Visit site** link will appear in settings.
+
+### Auto-deploy flow
+
+When **auto-sync** is enabled, publishing is fully automatic:
+
+1. You edit a note in Obsidian
+2. GHVault waits for the debounce interval (default 10s)
+3. Changes are pushed to GitHub
+4. A `repository_dispatch` event triggers the deploy workflow
+5. Your site updates within 1-2 minutes
+
+No manual sync or dispatch is needed — just edit and save.
+
+### Selective exclusion
+
+To exclude a note from the published site while keeping it synced, add:
+
+```yaml
+---
+ghvault-publish: false
 ---
 ```
 

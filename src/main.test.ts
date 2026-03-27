@@ -64,6 +64,7 @@ const mockUploadReleaseAsset = vi.fn().mockResolvedValue({
 });
 const mockDeleteRelease = vi.fn().mockResolvedValue(undefined);
 const mockDownloadReleaseAsset = vi.fn().mockResolvedValue(new ArrayBuffer(16));
+const mockTriggerDispatch = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("./github/client", () => ({
 	GitHubClient: class MockGitHubClient {
@@ -73,6 +74,7 @@ vi.mock("./github/client", () => ({
 		uploadReleaseAsset = mockUploadReleaseAsset;
 		deleteRelease = mockDeleteRelease;
 		downloadReleaseAsset = mockDownloadReleaseAsset;
+		triggerDispatch = mockTriggerDispatch;
 	},
 }));
 
@@ -444,6 +446,7 @@ describe("GHVaultPlugin", () => {
 			size: 1024,
 		});
 		mockDeleteRelease.mockClear().mockResolvedValue(undefined);
+		mockTriggerDispatch.mockClear().mockResolvedValue(undefined);
 		capturedChangeQueueOnReady = null;
 		capturedChangeQueueOnPersist = null;
 		mockChangeQueuePause.mockClear();
@@ -2358,6 +2361,103 @@ describe("GHVaultPlugin", () => {
 
 			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Restored 2 files"));
 			expect(notice).toBeDefined();
+		});
+	});
+
+	describe("publish dispatch debounce", () => {
+		const DISPATCH_SETTINGS = {
+			settings: {
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				dispatchOnPush: true,
+				dispatchEventType: "vault-synced",
+				publishDebounce: 60,
+			},
+		};
+
+		function mockSyncWithPush(): void {
+			mockSync.mockResolvedValueOnce({
+				pull: { created: [], modified: [], deleted: [], errors: [] },
+				push: { pushed: ["file.md"], deleted: [], oid: "abc123" },
+				conflicts: [],
+				resolvedCount: 0,
+				renames: [],
+			});
+		}
+
+		it("fires dispatch when push occurs and debounce window has elapsed", async () => {
+			const { plugin } = await loadPlugin(DISPATCH_SETTINGS);
+			mockSyncWithPush();
+			await plugin.runSync();
+
+			expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+			expect(mockTriggerDispatch).toHaveBeenCalledWith("vault-synced", {
+				branch: "main",
+				pushed: ["file.md"],
+				deleted: [],
+				commitOid: "abc123",
+			});
+		});
+
+		it("skips dispatch when within debounce window", async () => {
+			const { plugin } = await loadPlugin(DISPATCH_SETTINGS);
+
+			// First sync triggers dispatch
+			mockSyncWithPush();
+			await plugin.runSync();
+			expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+
+			// Reset cooldown so runSync is not blocked, but keep lastDispatchAt recent
+			plugin.lastSyncAt = 0;
+			mockTriggerDispatch.mockClear();
+
+			// Second sync within debounce window — dispatch should be skipped
+			mockSyncWithPush();
+			await plugin.runSync();
+			expect(mockTriggerDispatch).not.toHaveBeenCalled();
+		});
+
+		it("fires dispatch again after debounce window elapses", async () => {
+			vi.useFakeTimers();
+			const { plugin } = await loadPlugin(DISPATCH_SETTINGS);
+
+			// First sync triggers dispatch
+			mockSyncWithPush();
+			await plugin.runSync();
+			expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+
+			// Advance past debounce window (60 seconds)
+			vi.advanceTimersByTime(61_000);
+			plugin.lastSyncAt = 0;
+			mockTriggerDispatch.mockClear();
+
+			// Second sync after debounce window — dispatch should fire
+			mockSyncWithPush();
+			await plugin.runSync();
+			expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+
+			vi.useRealTimers();
+		});
+
+		it("does not fire dispatch when no files were pushed", async () => {
+			const { plugin } = await loadPlugin(DISPATCH_SETTINGS);
+			// Default mockSync has push: null (no push)
+			await plugin.runSync();
+			expect(mockTriggerDispatch).not.toHaveBeenCalled();
+		});
+
+		it("does not fire dispatch when dispatchOnPush is disabled", async () => {
+			const { plugin } = await loadPlugin({
+				settings: {
+					...DISPATCH_SETTINGS.settings,
+					dispatchOnPush: false,
+				},
+			});
+			mockSyncWithPush();
+			await plugin.runSync();
+			expect(mockTriggerDispatch).not.toHaveBeenCalled();
 		});
 	});
 });

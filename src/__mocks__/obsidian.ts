@@ -76,9 +76,9 @@ function createFakeEl(tag: string): FakeEl {
 		appendChild(child: FakeEl) {
 			this.children.push(child);
 		},
-		toggle(_show: boolean) {
+		toggle: vi.fn((_show: boolean) => {
 			// no-op in tests
-		},
+		}),
 		addEventListener(event: string, handler: () => void) {
 			const handlers = eventHandlers.get(event) ?? [];
 			handlers.push(handler);
@@ -273,6 +273,9 @@ export class ButtonComponent {
 	}
 	isDisabled(): boolean {
 		return this._disabled;
+	}
+	setCta(): this {
+		return this;
 	}
 	setWarning(): this {
 		return this;

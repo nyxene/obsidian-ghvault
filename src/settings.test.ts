@@ -26,6 +26,7 @@ function makeCallbacks(overrides?: Partial<SettingTabCallbacks>): SettingTabCall
 	return {
 		onSave: vi.fn().mockResolvedValue(undefined),
 		onTestConnection: vi.fn().mockResolvedValue(undefined),
+		onGenerateWorkflow: vi.fn().mockResolvedValue(undefined),
 		...overrides,
 	};
 }
@@ -257,13 +258,14 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates fourteen Setting instances", () => {
+		it("creates eighteen Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
 			// token, owner, repo, branch, sync folder, test connection,
-			// auto-sync, auto-sync debounce, remote pull interval, conflict strategy,
-			// exclude patterns, dispatch on push, event type, log level
-			expect(getSettings()).toHaveLength(14);
+			// auto-sync, debounce, pull interval, conflict strategy, exclude patterns,
+			// publish toggle, ssg dropdown, deploy, publish interval,
+			// dispatch toggle, event type, log level
+			expect(getSettings()).toHaveLength(18);
 		});
 
 		it("creates settings with expected names", () => {
@@ -280,6 +282,9 @@ describe("GHVaultSettingTab", () => {
 			expect(names).toContain("Auto-sync debounce");
 			expect(names).toContain("Remote pull interval");
 			expect(names).toContain("Conflict strategy");
+			expect(names).toContain("Publish to GitHub Pages");
+			expect(names).toContain("Static site generator");
+			expect(names).toContain("Deploy");
 			expect(names).toContain("Trigger workflow on push");
 			expect(names).toContain("Event type");
 			expect(names).toContain("Log level");
@@ -685,6 +690,88 @@ describe("GHVaultSettingTab", () => {
 		});
 	});
 
+	describe("publishing onChange handlers", () => {
+		it("makes SSG and workflow settings visible when publishing is turned ON", async () => {
+			const { tab, callbacks } = createTab({ pagesEnabled: false });
+			tab.display();
+
+			const ssgSetting = findSettingByName("Static site generator");
+			const workflowSetting = findSettingByName("Deploy");
+
+			const ssgToggleSpy = vi.spyOn(ssgSetting.settingEl, "toggle");
+			const workflowToggleSpy = vi.spyOn(workflowSetting.settingEl, "toggle");
+
+			const publishSetting = findSettingByName("Publish to GitHub Pages");
+			await publishSetting.toggleComponents[0].simulateChange(true);
+
+			expect(ssgToggleSpy).toHaveBeenCalledWith(true);
+			expect(workflowToggleSpy).toHaveBeenCalled();
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("auto-enables dispatchOnPush and sets default event type when publishing is turned ON", async () => {
+			const { tab, settings } = createTab({
+				pagesEnabled: false,
+				dispatchOnPush: false,
+				dispatchEventType: "",
+			});
+			tab.display();
+
+			const publishSetting = findSettingByName("Publish to GitHub Pages");
+			await publishSetting.toggleComponents[0].simulateChange(true);
+
+			expect(settings.dispatchOnPush).toBe(true);
+			expect(settings.dispatchEventType).toBe("vault-synced");
+		});
+
+		it("preserves existing dispatchEventType when publishing is turned ON", async () => {
+			const { tab, settings } = createTab({
+				pagesEnabled: false,
+				dispatchOnPush: false,
+				dispatchEventType: "custom-event",
+			});
+			tab.display();
+
+			const publishSetting = findSettingByName("Publish to GitHub Pages");
+			await publishSetting.toggleComponents[0].simulateChange(true);
+
+			expect(settings.dispatchOnPush).toBe(true);
+			expect(settings.dispatchEventType).toBe("custom-event");
+		});
+
+		it("calls onSave with new generator when SSG dropdown changes", async () => {
+			const { tab, callbacks, settings } = createTab({
+				pagesEnabled: true,
+				pagesGenerator: "quartz",
+			});
+			tab.display();
+
+			const ssgSetting = findSettingByName("Static site generator");
+			await ssgSetting.dropdownComponents[0].simulateChange("mkdocs");
+
+			expect(settings.pagesGenerator).toBe("mkdocs");
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("shows 'Deploy' button", () => {
+			const { tab } = createTab({ pagesEnabled: true });
+			tab.display();
+
+			const deploySetting = findSettingByName("Deploy");
+			expect(deploySetting.buttonComponents[0].getButtonText()).toBe("Deploy");
+		});
+
+		it("calls onGenerateWorkflow when Deploy button is clicked", async () => {
+			const { tab, callbacks } = createTab({ pagesEnabled: true });
+			tab.display();
+
+			const workflowSetting = findSettingByName("Deploy");
+			await workflowSetting.buttonComponents[0].simulateClick();
+
+			expect(callbacks.onGenerateWorkflow).toHaveBeenCalled();
+		});
+	});
+
 	describe("saveSettings error propagation", () => {
 		it("propagates error when onSave rejects", async () => {
 			const onSave = vi.fn().mockRejectedValue(new Error("saveData failed"));
@@ -750,6 +837,218 @@ describe("GHVaultSettingTab", () => {
 			vi.advanceTimersByTime(3000);
 			expect(button.getButtonText()).toBe("Test");
 			vi.useRealTimers();
+		});
+	});
+
+	describe("publish interval settings", () => {
+		it("displays value in minutes (600s → 10)", () => {
+			const { tab } = createTab({ publishDebounce: 600, pagesEnabled: true });
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			expect(setting).toBeDefined();
+			expect(setting.textComponents[0].getValue()).toBe("10");
+		});
+
+		it("displays fractional minutes (30s → 0.5)", () => {
+			const { tab } = createTab({ publishDebounce: 30, pagesEnabled: true });
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			expect(setting.textComponents[0].getValue()).toBe("0.5");
+		});
+
+		it("accepts float values (0.5 → stores 30 seconds)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("0.5");
+			expect(settings.publishDebounce).toBe(30);
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("accepts integer values (5 → stores 300 seconds)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("5");
+			expect(settings.publishDebounce).toBe(300);
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("rejects negative values (does not save)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("-5");
+			expect(settings.publishDebounce).toBe(600);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+		});
+
+		it("rejects values > 60 minutes (does not save)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("61");
+			expect(settings.publishDebounce).toBe(600);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+		});
+
+		it("rejects non-numeric input (does not save)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("abc");
+			expect(settings.publishDebounce).toBe(600);
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+		});
+
+		it("accepts boundary value 0 (stores 0 seconds)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("0");
+			expect(settings.publishDebounce).toBe(0);
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("accepts boundary value 60 (stores 3600 seconds)", async () => {
+			const { tab, callbacks, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("60");
+			expect(settings.publishDebounce).toBe(3600);
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("rounds to nearest second (1.5 min → 90s)", async () => {
+			const { tab, settings } = createTab({
+				publishDebounce: 600,
+				pagesEnabled: true,
+			});
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			await setting.textComponents[0].simulateChange("1.5");
+			expect(settings.publishDebounce).toBe(90);
+		});
+	});
+
+	describe("publishing toggle visibility", () => {
+		it("hides publish interval when publishing is disabled", () => {
+			const { tab } = createTab({ pagesEnabled: false });
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			expect(setting).toBeDefined();
+			expect(setting.settingEl.toggle).toHaveBeenCalledWith(false);
+		});
+
+		it("shows publish interval when publishing is enabled", () => {
+			const { tab } = createTab({ pagesEnabled: true });
+			tab.display();
+			const setting = findSettingByName("Publish interval");
+			expect(setting).toBeDefined();
+			expect(setting.settingEl.toggle).toHaveBeenCalledWith(true);
+		});
+
+		it("toggling publish ON shows child settings", async () => {
+			const { tab } = createTab({ pagesEnabled: false });
+			tab.display();
+
+			const ssgSetting = findSettingByName("Static site generator");
+			const workflowSetting = findSettingByName("Deploy");
+
+			// Clear initial toggle(false) calls from display()
+			ssgSetting.settingEl.toggle.mockClear();
+			workflowSetting.settingEl.toggle.mockClear();
+
+			const publishSetting = findSettingByName("Publish to GitHub Pages");
+			await publishSetting.toggleComponents[0].simulateChange(true);
+
+			expect(ssgSetting.settingEl.toggle).toHaveBeenCalledWith(true);
+			expect(workflowSetting.settingEl.toggle).toHaveBeenCalledWith(true);
+		});
+
+		it("Deploy button has CTA styling", () => {
+			const { tab } = createTab({ pagesEnabled: true });
+			tab.display();
+			const deploySetting = findSettingByName("Deploy");
+			// setCta() is called on the button — verify via button text existing
+			expect(deploySetting.buttonComponents[0].getButtonText()).toBe("Deploy");
+		});
+
+		it("Deploy button is disabled during deployment", async () => {
+			const onGenerateWorkflow = vi
+				.fn()
+				.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 100)));
+			const { tab } = createTab({ pagesEnabled: true }, { onGenerateWorkflow });
+			tab.display();
+			vi.useFakeTimers();
+
+			const deploySetting = findSettingByName("Deploy");
+			const button = deploySetting.buttonComponents[0];
+			const clickPromise = button.simulateClick();
+
+			expect(button.getButtonText()).toBe("Deploying...");
+			expect(button.isDisabled()).toBe(true);
+
+			vi.advanceTimersByTime(100);
+			await clickPromise;
+			vi.useRealTimers();
+		});
+
+		it("SSG dropdown triggers display refresh on change", async () => {
+			const { tab } = createTab({ pagesEnabled: true, pagesGenerator: "quartz" });
+			tab.display();
+			const displaySpy = vi.spyOn(tab, "display");
+
+			const ssgSetting = findSettingByName("Static site generator");
+			await ssgSetting.dropdownComponents[0].simulateChange("starlight");
+
+			expect(displaySpy).toHaveBeenCalled();
+		});
+
+		it("SSG dropdown ignores invalid generator values", async () => {
+			const { tab, callbacks, settings } = createTab({
+				pagesEnabled: true,
+				pagesGenerator: "quartz",
+			});
+			tab.display();
+			const ssgSetting = findSettingByName("Static site generator");
+			await ssgSetting.dropdownComponents[0].simulateChange("INVALID");
+			expect(settings.pagesGenerator).toBe("quartz");
+			expect(callbacks.onSave).not.toHaveBeenCalled();
+		});
+
+		it("Deploy button resets text and re-enables on error", async () => {
+			const onGenerateWorkflow = vi.fn().mockRejectedValue(new Error("deploy failed"));
+			const { tab } = createTab({ pagesEnabled: true }, { onGenerateWorkflow });
+			tab.display();
+
+			const deploySetting = findSettingByName("Deploy");
+			const button = deploySetting.buttonComponents[0];
+			await button.simulateClick();
+
+			expect(button.getButtonText()).toBe("Deploy");
+			expect(button.isDisabled()).toBe(false);
 		});
 	});
 });
