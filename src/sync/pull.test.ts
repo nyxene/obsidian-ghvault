@@ -320,6 +320,33 @@ describe("PullEngine", () => {
 		expect(state.setSHA).not.toHaveBeenCalled();
 	});
 
+	it("skips file exceeding 50MB after download in pullPerFile", async () => {
+		const oversizedBytes = 51 * 1024 * 1024;
+		const client = createMockClient([{ path: "huge.bin", sha: "sha-huge", size: 100 }]);
+
+		// Create base64 that decodes to >50MB (AAAA... = null bytes)
+		const bigBase64 = "A".repeat(Math.ceil((oversizedBytes * 4) / 3));
+		vi.mocked(client.getFileContent).mockResolvedValue({
+			content: bigBase64,
+			sha: "sha-huge",
+			size: oversizedBytes,
+		});
+
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual([]);
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0].path).toBe("huge.bin");
+		expect(result.errors[0].error).toContain("File too large");
+		expect(vault.writeFile).not.toHaveBeenCalled();
+		expect(vault.writeFileBinary).not.toHaveBeenCalled();
+	}, 15_000);
+
 	it("stores correct localContentHash in cache after download", async () => {
 		const client = createMockClient([{ path: "new.md", sha: "sha-new" }]);
 		const state = createMockState({});

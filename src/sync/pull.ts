@@ -526,8 +526,6 @@ export class PullEngine {
 		}
 
 		// Download per-file (incremental = typically few files, no ZIP).
-		// Note: MAX_FILE_SIZE check is skipped here because Compare API does not
-		// return file sizes. pullPerFile handles download errors gracefully.
 		await this.pullPerFile(branch, downloads, repoPathMap, result);
 
 		// Process deletes
@@ -743,6 +741,19 @@ export class PullEngine {
 					const repoPath = repoPathMap.get(change.path) ?? change.path;
 					const file = await this.client.getFileContent(repoPath, branch);
 					const rawBytes = decodeBase64ToBytes(file.content);
+
+					if (rawBytes.length > MAX_FILE_SIZE) {
+						this.logger.warn("File exceeds size limit, skipping", {
+							path: change.path,
+							size: rawBytes.length,
+							maxSize: MAX_FILE_SIZE,
+						});
+						result.errors.push({
+							path: change.path,
+							error: `File too large (${rawBytes.length} bytes, max ${MAX_FILE_SIZE})`,
+						});
+						return;
+					}
 
 					const blobSha = await computeGitBlobSha(rawBytes);
 					if (blobSha !== file.sha) {
