@@ -359,6 +359,31 @@ describe("GistManagerModal", () => {
 		expect(root.children).toHaveLength(0);
 	});
 
+	it("clipboard failure on copy URL does not crash", async () => {
+		Object.defineProperty(globalThis, "navigator", {
+			value: { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } },
+			writable: true,
+			configurable: true,
+		});
+
+		const registry: Record<string, GistRecord> = {
+			"notes/a.md": makeGistRecord({ vaultPath: "notes/a.md" }),
+		};
+		const client = mockClient();
+		const modal = new GistManagerModal({} as never, client as never, registry, vi.fn(), vi.fn());
+		modal.onOpen();
+
+		const root = modal.contentEl as unknown as MockElement;
+		const copyBtn = findByText(root, "Copy URL");
+		expect(copyBtn).toBeDefined();
+
+		// Should not throw
+		await Promise.all((copyBtn?.listeners.click ?? []).map((handler) => handler()));
+
+		const notice = noticeLog.find((n) => n.message.includes("gist.github.com"));
+		expect(notice).toBeDefined();
+	});
+
 	it("renders visibility badge for public and secret gists", () => {
 		const registry: Record<string, GistRecord> = {
 			"notes/public.md": makeGistRecord({

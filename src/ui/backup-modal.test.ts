@@ -265,6 +265,35 @@ describe("BackupModal", () => {
 		);
 	});
 
+	it("clipboard failure on copy URL does not crash", async () => {
+		Object.defineProperty(globalThis, "navigator", {
+			value: { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } },
+			writable: true,
+			configurable: true,
+		});
+
+		const backups = [
+			makeBackupRecord({ htmlUrl: "https://github.com/owner/repo/releases/clip-fail" }),
+		];
+		const client = mockClient({ listReleases: vi.fn().mockResolvedValue(backups) });
+		const modal = new BackupModal({} as never, client as never, vi.fn(), vi.fn());
+		modal.onOpen();
+
+		await vi.waitFor(() => {
+			expect(client.listReleases).toHaveBeenCalled();
+		});
+
+		const root = modal.contentEl as unknown as MockElement;
+		const copyBtn = findByText(root, "Copy URL");
+		expect(copyBtn).toBeDefined();
+
+		// Should not throw
+		await Promise.all((copyBtn?.listeners.click ?? []).map((handler) => handler()));
+
+		const notice = noticeLog.find((n) => n.message.includes("releases/clip-fail"));
+		expect(notice).toBeDefined();
+	});
+
 	it("error state close button calls modal close", async () => {
 		const client = mockClient({
 			listReleases: vi.fn().mockRejectedValue(new Error("Auth failed")),
@@ -416,6 +445,41 @@ describe("BackupModal", () => {
 
 		const failNotice = noticeLog.find((n) => n.message.includes("Restore failed"));
 		expect(failNotice).toBeDefined();
+	});
+
+	it("restore confirmation cancel returns to backup list without calling onRestore", async () => {
+		const backups = [makeBackupRecord()];
+		const client = mockClient({ listReleases: vi.fn().mockResolvedValue(backups) });
+		const onRestore = vi.fn();
+		const modal = new BackupModal({} as never, client as never, onRestore, vi.fn());
+		modal.onOpen();
+
+		await vi.waitFor(() => {
+			expect(client.listReleases).toHaveBeenCalled();
+		});
+
+		const root = modal.contentEl as unknown as MockElement;
+		const restoreBtn = findByText(root, "Restore");
+		expect(restoreBtn).toBeDefined();
+
+		// Click restore -> shows confirmation dialog
+		await Promise.all((restoreBtn?.listeners.click ?? []).map((handler) => handler()));
+
+		// Verify we are on the confirmation screen
+		const confirmMsg = findByText(root, "This will overwrite all current vault files. Continue?");
+		expect(confirmMsg).toBeDefined();
+
+		// Click cancel
+		const cancelBtn = findByText(root, "Cancel");
+		expect(cancelBtn).toBeDefined();
+		await Promise.all((cancelBtn?.listeners.click ?? []).map((handler) => handler()));
+
+		// Should return to backup list (not call onRestore)
+		expect(onRestore).not.toHaveBeenCalled();
+
+		// Verify backup list is re-rendered
+		const heading = findByText(root, "Vault Backups (1)");
+		expect(heading).toBeDefined();
 	});
 
 	it("loadBackups stale-data branch shows cached data and notice on refresh failure", async () => {

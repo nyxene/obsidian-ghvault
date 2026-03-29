@@ -17,8 +17,9 @@ function excludeStep(contentDir: string, excludePatterns: string): string {
 		.map((l) => l.trim())
 		.filter((l) => l && !l.startsWith("#"));
 	for (const pattern of patterns) {
+		const posixPattern = pattern.replace(/\*\*/g, "*");
 		lines.push(
-			`          find ${contentDir} -path "${contentDir}/${pattern}" -delete 2>/dev/null || true`,
+			`          find ${contentDir} -path "${contentDir}/${posixPattern}" -delete 2>/dev/null || true`,
 		);
 	}
 	return lines.join("\n");

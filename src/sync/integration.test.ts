@@ -973,6 +973,514 @@ describe("Sync integration", () => {
 		});
 	});
 
+	describe("network failure mid-pull — multiple files", () => {
+		it("fails for files after network error and retries detect them on next sync", async () => {
+			const remoteFiles = [
+				{ path: "a.md", sha: "sha-a", content: "content a", size: 9 },
+				{ path: "b.md", sha: "sha-b", content: "content b", size: 9 },
+				{ path: "c.md", sha: "sha-c", content: "content c", size: 9 },
+				{ path: "d.md", sha: "sha-d", content: "content d", size: 9 },
+			];
+
+			const vault = createMockVaultAdapter([]);
+			const headSha1 = "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33";
+			const client = createMockGitHubClient(remoteFiles, headSha1);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			// First two succeed, then network errors for the rest
+			let callCount = 0;
+			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
+				callCount++;
+				if (callCount <= 2) {
+					const file = remoteFiles.find((f) => f.path === path);
+					if (!file) return Promise.reject(new Error(`Not found: ${path}`));
+					vi.mocked(computeGitBlobSha).mockResolvedValueOnce(file.sha);
+					return Promise.resolve({
+						content: btoa(file.content),
+						sha: file.sha,
+						size: file.size,
+					});
+				}
+				return Promise.reject(new Error("Network error"));
+			});
+
+			// First sync: some files fail with network error
+			const result1 = await engine.sync();
+
+			// Some files were pulled, some errored
+			const pulledCount = result1.pull.created.length;
+			const errorCount = result1.pull.errors.length;
+			expect(pulledCount).toBeGreaterThan(0);
+			expect(errorCount).toBeGreaterThan(0);
+			expect(pulledCount + errorCount).toBe(4);
+
+			// After first sync, headOid is updated. Simulate remote advancing
+			// to a new commit so the second sync still detects unpulled files.
+			const headSha2 = "bb11cc22dd33ee44ff55aa00bb11cc22dd33ee44";
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: headSha2 });
+			vi.mocked(client.getCommit).mockResolvedValue({ sha: headSha2, treeSha: "tree-sha" });
+
+			// On retry, restore getFileContent to work for all files
+			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
+				const file = remoteFiles.find((f) => f.path === path);
+				if (!file) return Promise.reject(new Error(`Not found: ${path}`));
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(file.sha);
+				return Promise.resolve({
+					content: btoa(file.content),
+					sha: file.sha,
+					size: file.size,
+				});
+			});
+
+			// Update vault.listFiles to include already-pulled files
+			const pulledFiles = result1.pull.created;
+			vi.mocked(vault.listFiles).mockImplementation(async () => {
+				const items: LocalFileInfo[] = [];
+				for (const p of pulledFiles) {
+					const cached = state.getSHA(p);
+					items.push({
+						path: p,
+						contentHash: cached?.localContentHash ?? "hash-9",
+						size: 9,
+					});
+				}
+				return items;
+			});
+
+			// Second sync: previously failed files should still be detected
+			// because they are in remote tree but not in cache
+			const result2 = await engine.sync();
+
+			// The files that failed before should now be pulled
+			expect(result2.pull.created.length).toBeGreaterThan(0);
+			expect(result2.pull.errors).toHaveLength(0);
+
+			// All 4 files should now be in vault
+			for (const f of remoteFiles) {
+				expect(vault.files.has(f.path)).toBe(true);
+			}
+		});
+	});
+
+	describe("rate limit hit during sync", () => {
+		it("aborts cleanly without data corruption when rate limit is hit", async () => {
+			const remoteFiles = [
+				{ path: "file1.md", sha: "sha-1", content: "content 1", size: 9 },
+				{ path: "file2.md", sha: "sha-2", content: "content 2", size: 9 },
+				{ path: "file3.md", sha: "sha-3", content: "content 3", size: 9 },
+			];
+
+			const vault = createMockVaultAdapter([]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			// getRef and getTree succeed (they set up remote changes),
+			// but getFileContent throws GitHubRateLimitError on all calls
+			const { GitHubRateLimitError } = await import("../types");
+			const resetAt = new Date(Date.now() + 3600 * 1000);
+
+			vi.mocked(client.getFileContent).mockRejectedValue(new GitHubRateLimitError(resetAt));
+
+			// Sync should complete (pull handles per-file errors gracefully)
+			const result = await engine.sync();
+
+			// All files should have errors
+			expect(result.pull.errors).toHaveLength(3);
+			for (const err of result.pull.errors) {
+				expect(err.error).toContain("rate limit");
+			}
+
+			// No files should be created in vault
+			expect(result.pull.created).toHaveLength(0);
+			expect(result.pull.modified).toHaveLength(0);
+
+			// State should still be consistent — head OID updated to remote
+			expect(state.getHeadOid()).toBe("aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33");
+
+			// No push should have happened (no local files)
+			expect(result.push).toBeNull();
+
+			// Sync mutex released
+			expect(engine.isSyncing).toBe(false);
+		});
+	});
+
+	describe("Compare API 300-file boundary", () => {
+		it("falls back to full tree when compare returns exactly 300 files", async () => {
+			// Build 300 compare files and matching remote files
+			const remoteFiles: MockRemoteFile[] = [];
+			const compareFiles: Array<{
+				filename: string;
+				status: "added";
+				sha: string;
+			}> = [];
+
+			for (let i = 0; i < 300; i++) {
+				const path = `file-${String(i).padStart(3, "0")}.md`;
+				const content = `content ${i}`;
+				remoteFiles.push({ path, sha: `sha-${i}`, content, size: content.length });
+				compareFiles.push({ filename: path, status: "added", sha: `sha-${i}` });
+			}
+
+			const vault = createMockVaultAdapter([]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			// Pre-populate state with a known head so incremental path is attempted
+			const prevHead = "1100220033004400550066007700880099001100";
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: prevHead,
+					lastSyncedAt: 1000,
+					cache: {},
+				},
+			};
+
+			const currentHead = "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33";
+
+			// Mock compareCommits to return exactly 300 files (the limit)
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 300,
+				files: compareFiles,
+				headSha: currentHead,
+			});
+
+			await engine.sync();
+
+			// compareCommits should have been called (incremental attempted)
+			expect(client.compareCommits).toHaveBeenCalledWith(prevHead, currentHead);
+
+			// Because files.length === 300 (not < 300), it should fall back to getTree
+			// getTree is called during full tree path (fetchRefAndTree / fetchTreeForRef)
+			expect(client.getTree).toHaveBeenCalled();
+		});
+
+		it("uses compare results when under 300 files", async () => {
+			const remoteFiles = [{ path: "new.md", sha: "sha-new", content: "new content", size: 11 }];
+
+			const vault = createMockVaultAdapter([]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			const prevHead = "1100220033004400550066007700880099001100";
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: prevHead,
+					lastSyncedAt: 1000,
+					cache: {},
+				},
+			};
+
+			const currentHead = "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33";
+
+			// Only 1 file — well under limit
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "ahead",
+				aheadBy: 1,
+				files: [{ filename: "new.md", status: "added", sha: "sha-new" }],
+				headSha: currentHead,
+			});
+
+			// Reset getTree mock call count
+			vi.mocked(client.getTree).mockClear();
+
+			await engine.sync();
+
+			// compareCommits was used
+			expect(client.compareCommits).toHaveBeenCalled();
+			// getTree should NOT have been called (no fallback needed)
+			// Note: getTree is called by updateCacheFromCommit after push, but
+			// getCommit is the gatekeeper — if no push, no getTree
+			// Since there are no local files, push is null, so no updateCacheFromCommit
+			expect(client.getTree).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("corrupted state recovery", () => {
+		it("handles invalid cache entries gracefully", async () => {
+			const remoteFiles = [
+				{ path: "valid.md", sha: "sha-valid", content: "valid content", size: 13 },
+			];
+
+			const vault = createMockVaultAdapter([
+				{ path: "valid.md", content: "valid content" },
+				{ path: "local.md", content: "local only" },
+			]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			// Pre-populate state with a mix of valid and invalid entries
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: "0000000000000000000000000000000000000001",
+					lastSyncedAt: 1000,
+					cache: {
+						// Valid entry
+						"valid.md": {
+							remoteSha: "sha-valid",
+							localContentHash: "hash-13",
+							lastSyncedAt: 1000,
+							size: 13,
+							isBinary: false,
+						},
+						// Invalid: empty remoteSha (still passes type check but is logically empty)
+						"ghost.md": {
+							remoteSha: "",
+							localContentHash: "",
+							lastSyncedAt: 0,
+							size: 0,
+							isBinary: false,
+						},
+						// Invalid: completely wrong shape — SyncStateManager.load filters these out
+						"broken.md": "not-an-object" as unknown as {
+							remoteSha: string;
+							localContentHash: string;
+							lastSyncedAt: number;
+							size: number;
+							isBinary: boolean;
+						},
+						// Invalid: missing required fields — filtered by isValidCacheEntry
+						"partial.md": {
+							remoteSha: "sha-partial",
+						} as unknown as {
+							remoteSha: string;
+							localContentHash: string;
+							lastSyncedAt: number;
+							size: number;
+							isBinary: boolean;
+						},
+					},
+				},
+			};
+
+			// Sync should not crash
+			const result = await engine.sync();
+
+			// Engine completed without throwing
+			expect(engine.isSyncing).toBe(false);
+
+			// valid.md: remoteSha matches tree, no remote change; local content hash matches
+			// so it should not be pulled or pushed
+			expect(result.pull.created).not.toContain("valid.md");
+			expect(result.pull.modified).not.toContain("valid.md");
+
+			// ghost.md: in cache (empty remoteSha) but not in remote tree → remote delete.
+			// Also not in vault → local delete. Delete-delete = conflict (both sides agree).
+			// With default "skip" strategy, it's skipped — but detected as a conflict.
+			expect(result.conflicts.find((c) => c.path === "ghost.md")).toBeDefined();
+
+			// broken.md and partial.md should be filtered out by state.load()
+			// so they don't appear in cache at all — no spurious deletes or errors
+			expect(result.conflicts.find((c) => c.path === "broken.md")).toBeUndefined();
+			expect(result.conflicts.find((c) => c.path === "partial.md")).toBeUndefined();
+
+			// local.md should be pushed (new file not in cache)
+			expect(result.push).not.toBeNull();
+			expect(result.push?.pushed).toContain("local.md");
+		});
+
+		it("recovers from completely corrupted syncState object", async () => {
+			const remoteFiles = [
+				{ path: "fresh.md", sha: "sha-fresh", content: "fresh content", size: 13 },
+			];
+
+			const vault = createMockVaultAdapter([]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			// Completely corrupted state
+			storage.data = {
+				syncState: "this is not a valid state object" as unknown as Record<string, unknown>,
+			};
+
+			// Sync should treat this as first sync and not crash
+			const result = await engine.sync();
+
+			expect(result.pull.created).toContain("fresh.md");
+			expect(vault.files.get("fresh.md")).toBe("fresh content");
+			expect(engine.isSyncing).toBe(false);
+		});
+
+		it("recovers from invalid lastRemoteHeadSha", async () => {
+			const remoteFiles = [{ path: "note.md", sha: "sha-note", content: "note content", size: 12 }];
+
+			const vault = createMockVaultAdapter([]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			// Invalid HEAD SHA (not 40 hex chars) — should be reset to ""
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: "not-a-valid-sha",
+					lastSyncedAt: 1000,
+					cache: {},
+				},
+			};
+
+			// Should treat as first sync (empty head) and pull fresh
+			const result = await engine.sync();
+
+			expect(result.pull.created).toContain("note.md");
+			expect(vault.files.get("note.md")).toBe("note content");
+			expect(engine.isSyncing).toBe(false);
+		});
+	});
+
 	describe("incremental pull via Compare API", () => {
 		it("pulls incrementally when compareCommits returns ahead status", async () => {
 			const { engine, vault, client, storage, state } = createIntegrationSetup({

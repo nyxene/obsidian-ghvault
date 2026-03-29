@@ -65,6 +65,8 @@ const mockUploadReleaseAsset = vi.fn().mockResolvedValue({
 const mockDeleteRelease = vi.fn().mockResolvedValue(undefined);
 const mockDownloadReleaseAsset = vi.fn().mockResolvedValue(new ArrayBuffer(16));
 const mockTriggerDispatch = vi.fn().mockResolvedValue(undefined);
+const mockCreateOrUpdateFile = vi.fn().mockResolvedValue(undefined);
+const mockGetPagesConfig = vi.fn().mockResolvedValue(null);
 
 vi.mock("./github/client", () => ({
 	GitHubClient: class MockGitHubClient {
@@ -75,6 +77,8 @@ vi.mock("./github/client", () => ({
 		deleteRelease = mockDeleteRelease;
 		downloadReleaseAsset = mockDownloadReleaseAsset;
 		triggerDispatch = mockTriggerDispatch;
+		createOrUpdateFile = mockCreateOrUpdateFile;
+		getPagesConfig = mockGetPagesConfig;
 	},
 }));
 
@@ -155,9 +159,25 @@ vi.mock("./ui/gist-modal", () => ({
 
 const mockGistManagerModalOpen = vi.fn();
 
+interface GistManagerCallbacks {
+	onRegistryUpdate?: (registry: Record<string, unknown>) => Promise<void>;
+	onReadFile?: (path: string) => Promise<string>;
+}
+
+let capturedGistManagerCallbacks: GistManagerCallbacks = {};
+
 vi.mock("./ui/gist-manager-modal", () => ({
 	GistManagerModal: class MockGistManagerModal {
 		open = mockGistManagerModalOpen;
+		constructor(
+			_app: unknown,
+			_client: unknown,
+			_registry: unknown,
+			onRegistryUpdate?: (registry: Record<string, unknown>) => Promise<void>,
+			onReadFile?: (path: string) => Promise<string>,
+		) {
+			capturedGistManagerCallbacks = { onRegistryUpdate, onReadFile };
+		}
 	},
 }));
 
@@ -169,9 +189,24 @@ vi.mock("./ui/file-history-modal", () => ({
 
 const mockBackupModalOpen = vi.fn();
 
+interface BackupModalCallbacks {
+	onRestore?: (backup: Record<string, unknown>) => Promise<void>;
+	onDelete?: (backup: Record<string, unknown>) => Promise<void>;
+}
+
+let capturedBackupModalCallbacks: BackupModalCallbacks = {};
+
 vi.mock("./ui/backup-modal", () => ({
 	BackupModal: class MockBackupModal {
 		open = mockBackupModalOpen;
+		constructor(
+			_app: unknown,
+			_client: unknown,
+			onRestore?: (backup: Record<string, unknown>) => Promise<void>,
+			onDelete?: (backup: Record<string, unknown>) => Promise<void>,
+		) {
+			capturedBackupModalCallbacks = { onRestore, onDelete };
+		}
 	},
 }));
 
@@ -205,6 +240,12 @@ vi.mock("./sync/change-queue", () => ({
 		push = mockChangeQueuePush;
 		getPending = mockChangeQueueGetPending;
 	},
+}));
+
+const mockGetWorkflowTemplate = vi.fn().mockReturnValue("name: deploy\non: push\n");
+
+vi.mock("./publishing/workflow-templates", () => ({
+	getWorkflowTemplate: (...args: unknown[]) => mockGetWorkflowTemplate(...args),
 }));
 
 vi.mock("./utils/logger", () => ({
@@ -435,7 +476,9 @@ describe("GHVaultPlugin", () => {
 		mockGistModalOpen.mockClear();
 		mockGistModalWaitForResult.mockReset().mockResolvedValue(null);
 		mockGistManagerModalOpen.mockClear();
+		capturedGistManagerCallbacks = {};
 		mockBackupModalOpen.mockClear();
+		capturedBackupModalCallbacks = {};
 		mockCreateRelease.mockClear().mockResolvedValue({
 			id: 1,
 			htmlUrl: "https://github.com/owner/repo/releases/tag/backup-test",
@@ -447,6 +490,9 @@ describe("GHVaultPlugin", () => {
 		});
 		mockDeleteRelease.mockClear().mockResolvedValue(undefined);
 		mockTriggerDispatch.mockClear().mockResolvedValue(undefined);
+		mockCreateOrUpdateFile.mockClear().mockResolvedValue(undefined);
+		mockGetPagesConfig.mockClear().mockResolvedValue(null);
+		mockGetWorkflowTemplate.mockClear().mockReturnValue("name: deploy\non: push\n");
 		capturedChangeQueueOnReady = null;
 		capturedChangeQueueOnPersist = null;
 		mockChangeQueuePause.mockClear();
@@ -2057,6 +2103,68 @@ describe("GHVaultPlugin", () => {
 
 			expect(mockGistManagerModalOpen).toHaveBeenCalledTimes(1);
 		});
+
+		it("shows notice when githubClient is not configured", async () => {
+			const { plugin } = await loadPlugin(null);
+			noticeLog.length = 0;
+
+			(plugin as AnyPlugin).openGistManager();
+
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Configure settings"));
+			expect(notice).toBeDefined();
+			expect(mockGistManagerModalOpen).not.toHaveBeenCalled();
+		});
+
+		it("onRegistryUpdate callback saves registry", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			(plugin as AnyPlugin).openGistManager();
+
+			expect(capturedGistManagerCallbacks.onRegistryUpdate).toBeDefined();
+
+			const newRegistry = {
+				"notes/a.md": {
+					gistId: "g1",
+					htmlUrl: "https://gist.github.com/g1",
+					isPublic: false,
+					vaultPath: "notes/a.md",
+					description: "test",
+					createdAt: 1000,
+					updatedAt: 2000,
+				},
+			};
+			await capturedGistManagerCallbacks.onRegistryUpdate?.(newRegistry);
+
+			expect(plugin.gistRegistry).toEqual(newRegistry);
+			expect(plugin.saveData).toHaveBeenCalled();
+		});
+
+		it("onReadFile callback reads file from vault", async () => {
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			const { TFile } = await import("obsidian");
+			const file = new TFile();
+			file.path = "notes/test.md";
+			vi.mocked(vault.getFileByPath).mockReturnValue(file);
+			vault.read = vi.fn().mockResolvedValue("# Test Content");
+
+			(plugin as AnyPlugin).openGistManager();
+
+			expect(capturedGistManagerCallbacks.onReadFile).toBeDefined();
+
+			const content = await capturedGistManagerCallbacks.onReadFile?.("notes/test.md");
+			expect(content).toBe("# Test Content");
+		});
+
+		it("onReadFile callback throws when file not found", async () => {
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vi.mocked(vault.getFileByPath).mockReturnValue(null);
+
+			(plugin as AnyPlugin).openGistManager();
+
+			await expect(capturedGistManagerCallbacks.onReadFile?.("nonexistent.md")).rejects.toThrow(
+				"File not found: nonexistent.md",
+			);
+		});
 	});
 
 	describe("gist checkCallback behavior", () => {
@@ -2458,6 +2566,508 @@ describe("GHVaultPlugin", () => {
 			mockSyncWithPush();
 			await plugin.runSync();
 			expect(mockTriggerDispatch).not.toHaveBeenCalled();
+		});
+
+		it("logs warning but does not fail sync when dispatch throws", async () => {
+			mockTriggerDispatch.mockRejectedValueOnce(new Error("Dispatch API error"));
+
+			const { plugin, statusBarEl } = await loadPlugin(DISPATCH_SETTINGS);
+			mockSyncWithPush();
+			noticeLog.length = 0;
+
+			await plugin.runSync();
+
+			// Sync should still succeed — dispatch failure is caught
+			// Wait for the async .catch handler to execute
+			await vi.waitFor(() => {
+				expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+			});
+
+			const calls = vi
+				.mocked(statusBarEl.setText as ReturnType<typeof vi.fn>)
+				.mock.calls.map((c: unknown[]) => c[0]) as string[];
+			// Status should NOT be "error" — dispatch failure does not break sync
+			expect(calls).toContain("GHVault: syncing...");
+			// Should show sync success notice, not failure
+			const failNotices = noticeLog.filter((n) => n.message.includes("Sync failed"));
+			expect(failNotices).toHaveLength(0);
+		});
+
+		it("logs warning with non-Error throw from dispatch", async () => {
+			mockTriggerDispatch.mockRejectedValueOnce("string rejection");
+
+			const { plugin } = await loadPlugin(DISPATCH_SETTINGS);
+			mockSyncWithPush();
+
+			await plugin.runSync();
+
+			// Should not crash — the .catch handler uses String() fallback
+			await vi.waitFor(() => {
+				expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+			});
+		});
+	});
+
+	describe("restoreFromBackup guards", () => {
+		it("shows notice when githubClient is not configured", async () => {
+			const { plugin } = await loadPlugin(null);
+			// Ensure githubClient is truly null
+			expect(plugin.githubClient).toBeNull();
+			noticeLog.length = 0;
+
+			const backup = {
+				id: 1,
+				tagName: "backup-2026-01-01-120000",
+				name: "Vault Backup",
+				createdAt: "2026-01-01T12:00:00Z",
+				htmlUrl: "https://github.com/owner/repo/releases/tag/backup-2026",
+				assetName: "vault-backup.zip",
+				assetSize: 2048,
+				assetDownloadUrl:
+					"https://github.com/owner/repo/releases/download/backup-2026/vault-backup.zip",
+			};
+
+			await (plugin as AnyPlugin).restoreFromBackup(backup);
+
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Configure settings"));
+			expect(notice).toBeDefined();
+		});
+	});
+
+	describe("openBackupManager guards", () => {
+		it("shows notice when githubClient is not configured", async () => {
+			const { plugin } = await loadPlugin(null);
+			noticeLog.length = 0;
+
+			(plugin as AnyPlugin).openBackupManager();
+
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Configure settings"));
+			expect(notice).toBeDefined();
+			expect(mockBackupModalOpen).not.toHaveBeenCalled();
+		});
+
+		it("restore callback triggers restoreFromBackup", async () => {
+			const { processZipEntries } = await import("./utils/zip");
+			vi.mocked(processZipEntries).mockResolvedValueOnce(0);
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			(plugin as AnyPlugin).openBackupManager();
+
+			expect(capturedBackupModalCallbacks.onRestore).toBeDefined();
+
+			// Invoke the restore callback
+			const backup = {
+				id: 1,
+				tagName: "backup-2026-01-01-120000",
+				name: "Vault Backup",
+				createdAt: "2026-01-01T12:00:00Z",
+				htmlUrl: "https://github.com/owner/repo/releases/tag/backup-2026",
+				assetName: "vault-backup.zip",
+				assetSize: 2048,
+				assetDownloadUrl:
+					"https://github.com/owner/repo/releases/download/backup-2026/vault-backup.zip",
+			};
+
+			await capturedBackupModalCallbacks.onRestore?.(backup);
+
+			expect(mockDownloadReleaseAsset).toHaveBeenCalledWith(backup.assetDownloadUrl);
+		});
+
+		it("delete callback triggers deleteRelease", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			(plugin as AnyPlugin).openBackupManager();
+
+			expect(capturedBackupModalCallbacks.onDelete).toBeDefined();
+
+			const backup = { id: 42 };
+			await capturedBackupModalCallbacks.onDelete?.(backup);
+
+			expect(mockDeleteRelease).toHaveBeenCalledWith(42);
+		});
+	});
+
+	describe("isSyncExcludedByFrontmatter", () => {
+		it("returns true when frontmatter ghvault-sync is false", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const metadataCache = plugin.app.metadataCache;
+			vi.mocked(metadataCache.getCache).mockReturnValueOnce({
+				frontmatter: { "ghvault-sync": false },
+			});
+
+			const result = (plugin as AnyPlugin).isSyncExcludedByFrontmatter("notes/excluded.md");
+			expect(result).toBe(true);
+		});
+
+		it("returns false when frontmatter ghvault-sync is true", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const metadataCache = plugin.app.metadataCache;
+			vi.mocked(metadataCache.getCache).mockReturnValueOnce({
+				frontmatter: { "ghvault-sync": true },
+			});
+
+			const result = (plugin as AnyPlugin).isSyncExcludedByFrontmatter("notes/included.md");
+			expect(result).toBe(false);
+		});
+
+		it("returns false when no frontmatter exists", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const metadataCache = plugin.app.metadataCache;
+			vi.mocked(metadataCache.getCache).mockReturnValueOnce(null);
+
+			const result = (plugin as AnyPlugin).isSyncExcludedByFrontmatter("notes/normal.md");
+			expect(result).toBe(false);
+		});
+
+		it("returns false when ghvault-sync key is missing from frontmatter", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const metadataCache = plugin.app.metadataCache;
+			vi.mocked(metadataCache.getCache).mockReturnValueOnce({
+				frontmatter: { tags: ["note"] },
+			});
+
+			const result = (plugin as AnyPlugin).isSyncExcludedByFrontmatter("notes/tagged.md");
+			expect(result).toBe(false);
+		});
+	});
+
+	describe("generatePagesWorkflow", () => {
+		const PAGES_SETTINGS = {
+			settings: {
+				githubToken: "ghp_token1234567890123456",
+				owner: "me",
+				repo: "vault",
+				branch: "main",
+				pagesEnabled: true,
+				pagesGenerator: "quartz",
+				dispatchOnPush: false,
+				dispatchEventType: "vault-synced",
+			},
+		};
+
+		it("creates workflow file via createOrUpdateFile", async () => {
+			const { plugin } = await loadPlugin(PAGES_SETTINGS);
+
+			await (plugin as AnyPlugin).generatePagesWorkflow();
+
+			expect(mockGetWorkflowTemplate).toHaveBeenCalledTimes(1);
+			expect(mockCreateOrUpdateFile).toHaveBeenCalledTimes(1);
+			expect(mockCreateOrUpdateFile).toHaveBeenCalledWith(
+				".github/workflows/deploy.yml",
+				"name: deploy\non: push\n",
+				expect.stringContaining("deploy workflow"),
+				"main",
+			);
+		});
+
+		it("caches pagesUrl when getPagesConfig returns a result", async () => {
+			mockGetPagesConfig.mockResolvedValueOnce({
+				htmlUrl: "https://me.github.io/vault",
+			});
+
+			const { plugin } = await loadPlugin(PAGES_SETTINGS);
+
+			await (plugin as AnyPlugin).generatePagesWorkflow();
+
+			expect(plugin.settings.pagesUrl).toBe("https://me.github.io/vault");
+			expect(plugin.saveData).toHaveBeenCalled();
+		});
+
+		it("does not fail when getPagesConfig throws", async () => {
+			mockGetPagesConfig.mockRejectedValueOnce(new Error("404 Not Found"));
+
+			const { plugin } = await loadPlugin(PAGES_SETTINGS);
+
+			// Should not throw
+			await (plugin as AnyPlugin).generatePagesWorkflow();
+
+			expect(mockCreateOrUpdateFile).toHaveBeenCalledTimes(1);
+		});
+
+		it("triggers dispatch when dispatchOnPush is enabled", async () => {
+			const { plugin } = await loadPlugin({
+				settings: {
+					...PAGES_SETTINGS.settings,
+					dispatchOnPush: true,
+					dispatchEventType: "vault-synced",
+				},
+			});
+
+			await (plugin as AnyPlugin).generatePagesWorkflow();
+
+			expect(mockTriggerDispatch).toHaveBeenCalledTimes(1);
+			expect(mockTriggerDispatch).toHaveBeenCalledWith("vault-synced", {
+				branch: "main",
+				pushed: [".github/workflows/deploy.yml"],
+				deleted: [],
+				commitOid: "",
+			});
+		});
+
+		it("does not trigger dispatch when dispatchOnPush is disabled", async () => {
+			const { plugin } = await loadPlugin(PAGES_SETTINGS);
+
+			await (plugin as AnyPlugin).generatePagesWorkflow();
+
+			expect(mockTriggerDispatch).not.toHaveBeenCalled();
+		});
+
+		it("throws when githubClient is not configured", async () => {
+			const { plugin } = await loadPlugin(null);
+
+			await expect((plugin as AnyPlugin).generatePagesWorkflow()).rejects.toThrow("Not connected");
+		});
+
+		it("shows success notice after workflow creation", async () => {
+			const { plugin } = await loadPlugin(PAGES_SETTINGS);
+			noticeLog.length = 0;
+
+			await (plugin as AnyPlugin).generatePagesWorkflow();
+
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Workflow created"));
+			expect(notice).toBeDefined();
+		});
+	});
+
+	describe("backupVault frontmatter exclusion", () => {
+		it("excludes files with ghvault-sync: false frontmatter from backup", async () => {
+			const { TFile } = await import("obsidian");
+			const included = new TFile();
+			included.path = "note.md";
+			included.extension = "md";
+			included.stat = { size: 100, ctime: 0, mtime: 0 };
+
+			const excluded = new TFile();
+			excluded.path = "private.md";
+			excluded.extension = "md";
+			excluded.stat = { size: 200, ctime: 0, mtime: 0 };
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+			vault.getFiles = vi.fn().mockReturnValue([included, excluded]);
+			vault.readBinary = vi.fn().mockResolvedValue(new ArrayBuffer(100));
+
+			// Mock frontmatter: private.md has ghvault-sync: false
+			const metadataCache = plugin.app.metadataCache;
+			vi.mocked(metadataCache.getCache).mockImplementation((path: string) => {
+				if (path === "private.md") {
+					return { frontmatter: { "ghvault-sync": false } };
+				}
+				return null;
+			});
+
+			plugin.confirmBackup = vi.fn().mockResolvedValue(true);
+
+			Object.defineProperty(globalThis, "navigator", {
+				value: { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } },
+				writable: true,
+				configurable: true,
+			});
+
+			await plugin.backupVault();
+
+			// confirmBackup should be called with 1 file (excluding private.md)
+			expect(plugin.confirmBackup).toHaveBeenCalledWith(1, 100);
+		});
+	});
+
+	describe("toggleSyncStatusPanel", () => {
+		it("detaches existing panel when already open", async () => {
+			const mockDetach = vi.fn();
+			const mockLeaf = { detach: mockDetach, view: {} };
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockReturnValue([mockLeaf]);
+
+			await (plugin as AnyPlugin).toggleSyncStatusPanel();
+
+			expect(mockDetach).toHaveBeenCalledTimes(1);
+		});
+
+		it("opens panel in right leaf when not already open", async () => {
+			const mockSetViewState = vi.fn().mockResolvedValue(undefined);
+			const mockLeaf = { setViewState: mockSetViewState, view: {} };
+
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockReturnValue([]);
+			vi.mocked(workspace.getRightLeaf).mockReturnValue(mockLeaf);
+
+			await (plugin as AnyPlugin).toggleSyncStatusPanel();
+
+			expect(mockSetViewState).toHaveBeenCalledWith({
+				type: "ghvault-sync-status",
+				active: true,
+			});
+			expect(workspace.revealLeaf).toHaveBeenCalledWith(mockLeaf);
+		});
+
+		it("does nothing when no right leaf available", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockReturnValue([]);
+			vi.mocked(workspace.getRightLeaf).mockReturnValue(null);
+
+			// Should not throw
+			await (plugin as AnyPlugin).toggleSyncStatusPanel();
+		});
+	});
+
+	describe("refreshSyncStatusPanel with syncState/syncEngine null", () => {
+		it("sends empty data when syncState is null", async () => {
+			const mockRefresh = vi.fn();
+			const mockView = { refresh: mockRefresh };
+			const mockLeaf = { view: mockView };
+
+			const { plugin } = await loadPlugin(null);
+			const workspace = plugin.app.workspace;
+			vi.mocked(workspace.getLeavesOfType).mockReturnValue([mockLeaf]);
+
+			(plugin as AnyPlugin).refreshSyncStatusPanel();
+
+			expect(mockRefresh).toHaveBeenCalledWith({
+				synced: [],
+				pending: [],
+				conflicts: [],
+				untracked: [],
+				lastSyncedAt: 0,
+			});
+		});
+	});
+
+	describe("loadSettings dispatch and pages fields", () => {
+		it("parses dispatchOnPush boolean", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchOnPush: true },
+			});
+			expect(plugin.settings.dispatchOnPush).toBe(true);
+		});
+
+		it("defaults dispatchOnPush for non-boolean", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchOnPush: "yes" },
+			});
+			expect(plugin.settings.dispatchOnPush).toBe(DEFAULT_SETTINGS.dispatchOnPush);
+		});
+
+		it("parses dispatchEventType string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "my-event" },
+			});
+			expect(plugin.settings.dispatchEventType).toBe("my-event");
+		});
+
+		it("defaults dispatchEventType for empty string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "" },
+			});
+			expect(plugin.settings.dispatchEventType).toBe(DEFAULT_SETTINGS.dispatchEventType);
+		});
+
+		it("defaults dispatchEventType for whitespace-only string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "   " },
+			});
+			expect(plugin.settings.dispatchEventType).toBe(DEFAULT_SETTINGS.dispatchEventType);
+		});
+
+		it("trims dispatchEventType", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "  my-event  " },
+			});
+			expect(plugin.settings.dispatchEventType).toBe("my-event");
+		});
+
+		it("parses pagesEnabled boolean", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { pagesEnabled: true },
+			});
+			expect(plugin.settings.pagesEnabled).toBe(true);
+		});
+
+		it("defaults pagesEnabled for non-boolean", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { pagesEnabled: "yes" },
+			});
+			expect(plugin.settings.pagesEnabled).toBe(DEFAULT_SETTINGS.pagesEnabled);
+		});
+
+		it("parses valid pagesGenerator", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { pagesGenerator: "mkdocs" },
+			});
+			expect(plugin.settings.pagesGenerator).toBe("mkdocs");
+		});
+
+		it("defaults pagesGenerator for invalid value", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { pagesGenerator: "invalid-generator" },
+			});
+			expect(plugin.settings.pagesGenerator).toBe(DEFAULT_SETTINGS.pagesGenerator);
+		});
+
+		it("parses pagesUrl string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { pagesUrl: "https://example.github.io" },
+			});
+			expect(plugin.settings.pagesUrl).toBe("https://example.github.io");
+		});
+
+		it("defaults pagesUrl for non-string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { pagesUrl: 12345 },
+			});
+			expect(plugin.settings.pagesUrl).toBe(DEFAULT_SETTINGS.pagesUrl);
+		});
+
+		it("parses publishDebounce within range", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { publishDebounce: 120 },
+			});
+			expect(plugin.settings.publishDebounce).toBe(120);
+		});
+
+		it("defaults publishDebounce for out-of-range value", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { publishDebounce: 5000 },
+			});
+			expect(plugin.settings.publishDebounce).toBe(DEFAULT_SETTINGS.publishDebounce);
+		});
+
+		it("defaults publishDebounce for negative value", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { publishDebounce: -1 },
+			});
+			expect(plugin.settings.publishDebounce).toBe(DEFAULT_SETTINGS.publishDebounce);
+		});
+
+		it("defaults publishDebounce for non-number", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { publishDebounce: "fast" },
+			});
+			expect(plugin.settings.publishDebounce).toBe(DEFAULT_SETTINGS.publishDebounce);
+		});
+
+		it("allows publishDebounce of 0", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { publishDebounce: 0 },
+			});
+			expect(plugin.settings.publishDebounce).toBe(0);
+		});
+
+		it("parses excludePatterns string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { excludePatterns: "drafts/**\n*.tmp" },
+			});
+			expect(plugin.settings.excludePatterns).toBe("drafts/**\n*.tmp");
+		});
+
+		it("defaults excludePatterns for non-string", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { excludePatterns: 12345 },
+			});
+			expect(plugin.settings.excludePatterns).toBe(DEFAULT_SETTINGS.excludePatterns);
 		});
 	});
 });

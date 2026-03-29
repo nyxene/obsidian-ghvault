@@ -1490,4 +1490,190 @@ describe("GitHubClient", () => {
 			expect(result?.buildType).toBe("legacy");
 		});
 	});
+
+	describe("createBlob", () => {
+		it("sends correct URL and body, returns SHA", async () => {
+			mockResponse({ sha: "blob-sha-123" });
+			const client = createClient();
+
+			const result = await client.createBlob("aGVsbG8gd29ybGQ=");
+
+			expect(result).toBe("blob-sha-123");
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/repos/testowner/testrepo/git/blobs");
+			expect(arg.method).toBe("POST");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.content).toBe("aGVsbG8gd29ybGQ=");
+			expect(body.encoding).toBe("base64");
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ bad: "shape" });
+			await expect(createClient().createBlob("abc")).rejects.toThrow(
+				"Invalid blob response from GitHub API",
+			);
+		});
+	});
+
+	describe("createTreeFromEntries", () => {
+		it("sends correct URL, body format with base_tree and entries, returns SHA", async () => {
+			mockResponse({ sha: "tree-sha-456" });
+			const client = createClient();
+
+			const result = await client.createTreeFromEntries("base-tree-sha", [
+				{ path: "notes/a.md", sha: "blob-sha-1" },
+				{ path: "notes/b.md", sha: "blob-sha-2", mode: "100755" },
+			]);
+
+			expect(result).toBe("tree-sha-456");
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/repos/testowner/testrepo/git/trees");
+			expect(arg.method).toBe("POST");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.base_tree).toBe("base-tree-sha");
+			const tree = body.tree as Array<Record<string, unknown>>;
+			expect(tree).toHaveLength(2);
+			expect(tree[0]).toEqual({
+				path: "notes/a.md",
+				mode: "100644",
+				type: "blob",
+				sha: "blob-sha-1",
+			});
+			expect(tree[1]).toEqual({
+				path: "notes/b.md",
+				mode: "100755",
+				type: "blob",
+				sha: "blob-sha-2",
+			});
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ bad: "shape" });
+			await expect(
+				createClient().createTreeFromEntries("base", [{ path: "f.md", sha: "s" }]),
+			).rejects.toThrow("Invalid tree response from GitHub API");
+		});
+	});
+
+	describe("createCommitRest", () => {
+		it("sends correct URL, body with parents/tree/message, returns SHA", async () => {
+			mockResponse({ sha: "commit-sha-789" });
+			const client = createClient();
+
+			const result = await client.createCommitRest("tree-sha", "parent-sha", "sync vault");
+
+			expect(result).toBe("commit-sha-789");
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/repos/testowner/testrepo/git/commits");
+			expect(arg.method).toBe("POST");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.message).toBe("sync vault");
+			expect(body.tree).toBe("tree-sha");
+			expect(body.parents).toEqual(["parent-sha"]);
+		});
+
+		it("throws on invalid response shape", async () => {
+			mockResponse({ bad: "shape" });
+			await expect(createClient().createCommitRest("t", "p", "m")).rejects.toThrow(
+				"Invalid commit response from GitHub API",
+			);
+		});
+	});
+
+	describe("updateRef", () => {
+		it("sends PATCH to correct URL with sha in body", async () => {
+			mockResponse({ ref: "refs/heads/main" });
+			const client = createClient();
+
+			await client.updateRef("main", "new-commit-sha");
+
+			const lastCall = mockRequest.mock.calls[mockRequest.mock.calls.length - 1];
+			const arg = lastCall[0] as { url: string; method: string; body: string };
+			expect(arg.url).toBe("https://api.github.com/repos/testowner/testrepo/git/refs/heads/main");
+			expect(arg.method).toBe("PATCH");
+			const body = JSON.parse(arg.body) as Record<string, unknown>;
+			expect(body.sha).toBe("new-commit-sha");
+		});
+	});
+
+	describe("handleRequestError — 409 with /git/ref/ path", () => {
+		it("throws GitHubEmptyRepoError when path contains /git/ref/", async () => {
+			// When getRef is called on an empty repo, GitHub returns 409.
+			// The path will contain /git/ref/ so handleRequestError should return GitHubEmptyRepoError.
+			mockRequest.mockRejectedValue({ status: 409 });
+			await expect(createClient().getRef("main")).rejects.toThrow(GitHubEmptyRepoError);
+		});
+
+		it("throws GitHubConflictError for 409 on non-ref path without empty message", async () => {
+			mockRequest.mockRejectedValue({ status: 409 });
+			await expect(createClient().createFile("test.md", "content", "msg", "main")).rejects.toThrow(
+				GitHubConflictError,
+			);
+		});
+	});
+
+	describe("ETag cache update on 200 after 304", () => {
+		beforeEach(() => {
+			mockRequest.mockReset();
+		});
+
+		function mockResponseOnce(json: unknown, headers: Record<string, string> = {}): void {
+			mockRequest.mockResolvedValueOnce({
+				json,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+					...headers,
+				},
+				status: 200,
+				text: JSON.stringify(json),
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+		}
+
+		it("updates cached ETag after 304 followed by 200 with new ETag", async () => {
+			const data1 = { ref: "refs/heads/main", object: { sha: "abc123" } };
+			const data2 = { ref: "refs/heads/main", object: { sha: "def456" } };
+
+			// First request: 200 with etag-1
+			mockResponseOnce(data1, { etag: '"etag-1"' });
+			// Second request: 304 (cache hit)
+			mockRequest.mockResolvedValueOnce({
+				status: 304,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4998",
+					"x-ratelimit-reset": "1700000000",
+				},
+				json: null,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+			// Third request: 200 with new etag-2 and new data
+			mockResponseOnce(data2, { etag: '"etag-2"' });
+
+			const client = createClient();
+
+			// First call caches etag-1
+			const first = await client.getRef("main");
+			expect(first.sha).toBe("abc123");
+
+			// Second call returns cached data (304)
+			const second = await client.getRef("main");
+			expect(second.sha).toBe("abc123");
+
+			// Third call gets 200 with new data and etag-2
+			const third = await client.getRef("main");
+			expect(third.sha).toBe("def456");
+
+			// biome-ignore lint/suspicious/noExplicitAny: access private field for testing
+			const cache = (client as any).etagCache as Map<string, { etag: string; data: unknown }>;
+			const entry = [...cache.values()][0];
+			expect(entry.etag).toBe('"etag-2"');
+		});
+	});
 });

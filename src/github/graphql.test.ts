@@ -227,6 +227,25 @@ describe("GitHubGraphQL", () => {
 				}),
 			).rejects.toThrow("GraphQL error: something unexpected");
 		});
+
+		it("truncates long error messages beyond 200 characters", async () => {
+			const longMessage = "A".repeat(300);
+			mockGraphQLError([{ message: longMessage }]);
+			try {
+				await createGraphQL().createCommit({
+					...baseOptions,
+					additions: [{ path: "f.md", base64Content: "x" }],
+					deletions: [],
+				});
+				expect.unreachable("Should have thrown");
+			} catch (error: unknown) {
+				const msg = (error as Error).message;
+				// Should be truncated: "GraphQL error: " + 200 chars + ellipsis character
+				expect(msg.length).toBeLessThan(300);
+				expect(msg).toContain("\u2026");
+				expect(msg).toBe(`GraphQL error: ${"A".repeat(200)}\u2026`);
+			}
+		});
 	});
 });
 
