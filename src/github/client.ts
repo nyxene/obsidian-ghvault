@@ -86,6 +86,8 @@ interface ETagCacheEntry {
 	data: unknown;
 }
 
+const ETAG_CACHE_MAX = 500;
+
 export class GitHubClient {
 	private readonly token: string;
 	private readonly owner: string;
@@ -757,6 +759,10 @@ export class GitHubClient {
 		const etag = response.headers.etag ?? response.headers.ETag;
 		if (etag) {
 			this.etagCache.set(path, { etag, data: response.json });
+			if (this.etagCache.size > ETAG_CACHE_MAX) {
+				const oldest = this.etagCache.keys().next().value;
+				if (oldest !== undefined) this.etagCache.delete(oldest);
+			}
 		}
 
 		const json = response.json;
