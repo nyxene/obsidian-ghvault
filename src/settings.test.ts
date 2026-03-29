@@ -258,14 +258,14 @@ describe("GHVaultSettingTab", () => {
 			expect(emptySpy).toHaveBeenCalled();
 		});
 
-		it("creates eighteen Setting instances", () => {
+		it("creates nineteen Setting instances", () => {
 			const { tab } = createTab();
 			tab.display();
-			// token, owner, repo, branch, sync folder, test connection,
+			// token, token warning, owner, repo, branch, sync folder, test connection,
 			// auto-sync, debounce, pull interval, conflict strategy, exclude patterns,
 			// publish toggle, ssg dropdown, deploy, publish interval,
 			// dispatch toggle, event type, log level
-			expect(getSettings()).toHaveLength(18);
+			expect(getSettings()).toHaveLength(19);
 		});
 
 		it("creates settings with expected names", () => {

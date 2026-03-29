@@ -202,6 +202,15 @@ export class GHVaultSettingTab extends PluginSettingTab {
 			});
 		});
 
+		connectionGroup.addSetting((setting) => {
+			setting.settingEl.addClass("ghvault-token-warning");
+			setting.setDesc(
+				"Token is stored unencrypted in plugin data. Use a fine-grained PAT with minimal scopes.",
+			);
+			setting.settingEl.style.borderTop = "none";
+			setting.settingEl.style.paddingTop = "0";
+		});
+
 		if (this.settings.githubToken) {
 			connectionGroup.addSetting((setting) => {
 				setting.setName("Forget token");
