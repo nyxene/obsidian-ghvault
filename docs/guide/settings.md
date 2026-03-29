@@ -196,6 +196,42 @@ on:
 
 ---
 
+## Features
+
+### Share as Gist
+
+Share any markdown note as a GitHub Gist (public or secret). Access via:
+
+- **Ribbon** — click the share icon in the left sidebar
+- **Context menu** — right-click a `.md` file → "Share as Gist"
+- **Command palette** — `Ctrl/Cmd+P` → "GHVault: Share note as Gist"
+
+Choose visibility, add a description, and the URL is copied to your clipboard. Manage shared gists via the list icon in the ribbon — copy URL, update content, or delete.
+
+Requires `Gists: Read and Write` in your PAT's **Account permissions**.
+
+### Vault Backup
+
+Create a full vault snapshot as a ZIP archive stored as a GitHub Release:
+
+- **Backup** — ribbon archive icon, or `Ctrl/Cmd+P` → "GHVault: Backup vault"
+- **Restore** — ribbon history icon, or `Ctrl/Cmd+P` → "GHVault: Manage backups" → select and restore
+- **Manual** — download the ZIP from [Releases](https://github.com/nyxene/obsidian-ghvault/releases) and extract into your vault
+
+Each backup is tagged `backup-YYYY-MM-DD-HHmmss`. Maximum vault size: 500 MB.
+
+### File History
+
+View commit history for any file:
+
+- **Command palette** — `Ctrl/Cmd+P` → "GHVault: Show file history"
+
+Shows commit messages, dates, and authors with pagination.
+
+![File history modal](../screenshots/file-history.png)
+
+---
+
 ## Advanced
 
 ### Log level
