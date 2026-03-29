@@ -362,19 +362,9 @@ export class PullEngine {
 			return result;
 		}
 
-		// Map repo paths to vault paths, filtering out files outside syncFolder.
-		// Build a vault->repo path map for API calls and a vault->size map.
-		const mappedEntries = this.mapTreeToVaultPaths(treeEntries);
-		const repoPathMap = this.buildRepoPathMap(treeEntries);
-
-		const treeSizeMap = new Map<string, number>();
-		const treeShaMap = new Map<string, string>();
-		for (const entry of mappedEntries) {
-			if (entry.size !== undefined) {
-				treeSizeMap.set(entry.path, entry.size);
-			}
-			treeShaMap.set(entry.path, entry.sha);
-		}
+		// Single-pass: map repo paths → vault paths, build repo path map + size/sha maps
+		const { mappedEntries, repoPathMap, treeSizeMap, treeShaMap } =
+			this.processTreeEntries(treeEntries);
 
 		const cache = this.state.getAllSHAs();
 		const allChanges = computeRemoteChanges(mappedEntries, cache, this.excludePatterns);
@@ -624,22 +614,37 @@ export class PullEngine {
 	}
 
 	/**
-	 * Build a map from vault path -> repo path for API calls.
-	 * Only needed when syncFolder is set.
+	 * Single-pass processing of tree entries: map paths, build repo map + size/sha maps.
+	 * Replaces three separate iterations over the tree.
 	 */
-	private buildRepoPathMap(
-		entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"],
-	): Map<string, string> {
-		const map = new Map<string, string>();
-		if (!this.syncFolder) return map;
+	private processTreeEntries(entries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"]): {
+		mappedEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"];
+		repoPathMap: Map<string, string>;
+		treeSizeMap: Map<string, number>;
+		treeShaMap: Map<string, string>;
+	} {
+		const mappedEntries: Awaited<ReturnType<GitHubClient["getTree"]>>["entries"] = [];
+		const repoPathMap = new Map<string, string>();
+		const treeSizeMap = new Map<string, number>();
+		const treeShaMap = new Map<string, string>();
 
 		for (const entry of entries) {
-			const vaultPath = toVaultPath(entry.path, this.syncFolder);
-			if (vaultPath !== null) {
-				map.set(vaultPath, entry.path);
+			const vaultPath = this.syncFolder ? toVaultPath(entry.path, this.syncFolder) : entry.path;
+			if (vaultPath === null) continue;
+
+			const mapped = this.syncFolder ? { ...entry, path: vaultPath } : entry;
+			mappedEntries.push(mapped);
+
+			if (this.syncFolder) {
+				repoPathMap.set(vaultPath, entry.path);
 			}
+			if (entry.size !== undefined) {
+				treeSizeMap.set(vaultPath, entry.size);
+			}
+			treeShaMap.set(vaultPath, entry.sha);
 		}
-		return map;
+
+		return { mappedEntries, repoPathMap, treeSizeMap, treeShaMap };
 	}
 
 	private async pullViaZip(

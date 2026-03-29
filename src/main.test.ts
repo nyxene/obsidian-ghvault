@@ -3130,4 +3130,49 @@ describe("GHVaultPlugin", () => {
 			expect(plugin.settings.excludePatterns).toBe(DEFAULT_SETTINGS.excludePatterns);
 		});
 	});
+
+	describe("full lifecycle", () => {
+		it("load → configure → sync → change settings → sync uses rebuilt engine", async () => {
+			// Step 1: Load plugin with initial settings
+			const { plugin, onSave } = await loadPlugin(CONFIGURED_SETTINGS);
+			expect(plugin.syncEngine).not.toBeNull();
+			const engineAfterLoad = plugin.syncEngine;
+
+			// Step 2: First sync
+			mockSync.mockClear();
+			await plugin.runSync();
+			expect(mockSync).toHaveBeenCalledTimes(1);
+
+			// Step 3: Change settings via onSave (triggers rebuildSyncEngine)
+			await onSave({
+				githubToken: "ghp_newtoken12345678901234",
+				owner: "newowner",
+				repo: "newrepo",
+				branch: "develop",
+				syncFolder: "notes",
+				logLevel: "debug",
+			});
+
+			// Engine should be rebuilt (new instance)
+			expect(plugin.syncEngine).not.toBeNull();
+			expect(plugin.syncEngine).not.toBe(engineAfterLoad);
+
+			// Step 4: Reset cooldown and run second sync with rebuilt engine
+			plugin.lastSyncAt = 0;
+			mockSync.mockClear();
+			await plugin.runSync();
+			expect(mockSync).toHaveBeenCalledTimes(1);
+		});
+
+		it("clearSyncState clears cache and headOid", async () => {
+			const { plugin } = await loadPlugin(CONFIGURED_SETTINGS);
+			mockStateClear.mockClear();
+			mockStateSave.mockClear();
+
+			await plugin.clearSyncState();
+
+			expect(mockStateClear).toHaveBeenCalledTimes(1);
+			expect(mockStateSave).toHaveBeenCalledTimes(1);
+		});
+	});
 });
