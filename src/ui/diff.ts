@@ -14,6 +14,7 @@ export interface DiffHunk {
 }
 
 const DEFAULT_CONTEXT_LINES = 3;
+const DIFF_MAX_CELLS = 4_000_000;
 
 /**
  * Compute a unified line-based diff between two texts using LCS.
@@ -26,6 +27,18 @@ export function computeDiff(localText: string, remoteText: string): DiffLine[] {
 	const remoteLines = remoteText.split("\n");
 	const n = localLines.length;
 	const m = remoteLines.length;
+
+	// Fallback for large inputs to avoid O(n*m) memory/time blow-up
+	if (n * m > DIFF_MAX_CELLS) {
+		const result: DiffLine[] = [];
+		for (let i = 0; i < n; i++) {
+			result.push({ type: "remove", text: localLines[i], localLine: i + 1 });
+		}
+		for (let j = 0; j < m; j++) {
+			result.push({ type: "add", text: remoteLines[j], remoteLine: j + 1 });
+		}
+		return result;
+	}
 
 	// Build LCS table
 	const dp: number[][] = [];

@@ -73,10 +73,14 @@ function collectAllText(root: MockEl): string {
 	return result;
 }
 
+const capturedActions: Array<{ icon: string; title: string; callback: () => void }> = [];
+
 vi.mock("obsidian", () => ({
 	ItemView: class {
 		contentEl = createMockEl();
-		addAction() {}
+		addAction(icon: string, title: string, callback: () => void) {
+			capturedActions.push({ icon, title, callback });
+		}
 	},
 	setIcon: vi.fn(),
 }));
@@ -461,6 +465,21 @@ describe("SyncStatusView", () => {
 			// Simulate click
 			fileItems[0].listeners.click?.[0]?.();
 			expect(onFileClick).toHaveBeenCalledWith("clicked.md");
+		});
+	});
+
+	describe("onSyncClick action button", () => {
+		it("calls onSyncClick when action button is triggered", async () => {
+			capturedActions.length = 0;
+			const view = createView();
+			const onSync = vi.fn();
+			view.setCallbacks(onSync, vi.fn());
+			await view.onOpen();
+
+			const syncAction = capturedActions.find((a) => a.title === "Sync now");
+			expect(syncAction).toBeDefined();
+			syncAction?.callback();
+			expect(onSync).toHaveBeenCalledOnce();
 		});
 	});
 

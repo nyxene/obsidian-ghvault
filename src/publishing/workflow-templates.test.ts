@@ -100,13 +100,13 @@ describe("workflow-templates", () => {
 	describe("excludePatterns support", () => {
 		it("adds find -delete commands for each pattern", () => {
 			const template = getWorkflowTemplate("quartz", "main", "", "drafts/**\n*.tmp")!;
-			expect(template).toContain('find quartz/content -path "quartz/content/drafts/**" -delete');
+			expect(template).toContain('find quartz/content -path "quartz/content/drafts/*" -delete');
 			expect(template).toContain('find quartz/content -path "quartz/content/*.tmp" -delete');
 		});
 
 		it("ignores empty lines and comments", () => {
 			const template = getWorkflowTemplate("quartz", "main", "", "drafts/**\n\n# comment\n*.tmp")!;
-			expect(template).toContain("drafts/**");
+			expect(template).toContain("drafts/*");
 			expect(template).toContain("*.tmp");
 			expect(template).not.toContain("# comment");
 		});
@@ -114,7 +114,7 @@ describe("workflow-templates", () => {
 		it("works with syncFolder + excludePatterns together", () => {
 			const template = getWorkflowTemplate("quartz", "main", "docs/ai", "private/**")!;
 			expect(template).toContain('cp -a "vault/docs/ai/."');
-			expect(template).toContain('find quartz/content -path "quartz/content/private/**" -delete');
+			expect(template).toContain('find quartz/content -path "quartz/content/private/*" -delete');
 		});
 
 		it("generates no find commands when excludePatterns is empty", () => {
@@ -152,8 +152,8 @@ describe("workflow-templates", () => {
 
 		it("uses quartz/content as exclude dir (not vault)", () => {
 			const template = getWorkflowTemplate("quartz", "main", "", "drafts/**")!;
-			expect(template).toContain('find quartz/content -path "quartz/content/drafts/**" -delete');
-			expect(template).not.toMatch(/find vault -path "vault\/drafts\/\*\*" -delete/);
+			expect(template).toContain('find quartz/content -path "quartz/content/drafts/*" -delete');
+			expect(template).not.toMatch(/find vault -path "vault\/drafts\/\*" -delete/);
 		});
 	});
 
@@ -170,10 +170,10 @@ describe("workflow-templates", () => {
 	});
 
 	describe("excludePatterns edge cases", () => {
-		it("handles glob ** special characters", () => {
+		it("converts glob ** to POSIX-compatible * in find -path", () => {
 			const template = getWorkflowTemplate("quartz", "main", "", "private/nested/**")!;
 			expect(template).toContain(
-				'find quartz/content -path "quartz/content/private/nested/**" -delete',
+				'find quartz/content -path "quartz/content/private/nested/*" -delete',
 			);
 		});
 
@@ -185,7 +185,7 @@ describe("workflow-templates", () => {
 
 		it("quartz uses quartz/content as exclude dir even with syncFolder", () => {
 			const template = getWorkflowTemplate("quartz", "main", "docs/ai", "temp/**")!;
-			expect(template).toContain('find quartz/content -path "quartz/content/temp/**" -delete');
+			expect(template).toContain('find quartz/content -path "quartz/content/temp/*" -delete');
 		});
 	});
 });

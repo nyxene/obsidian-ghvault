@@ -372,6 +372,31 @@ describe("PushEngine", () => {
 		expect(client.updateRef).toHaveBeenCalled();
 	});
 
+	it("propagates updateRef failure in REST fallback path", async () => {
+		const graphql = createMockGraphQL();
+		const client = createMockClient();
+		const state = createMockState();
+		const vault = createMockVault();
+		const largeBytes = new Uint8Array(1.6 * 1024 * 1024);
+		vi.mocked(vault.readFileBinary).mockResolvedValue(largeBytes.buffer as ArrayBuffer);
+		(client.updateRef as ReturnType<typeof vi.fn>).mockRejectedValue(
+			new Error("Reference update failed: not a fast-forward"),
+		);
+		const engine = createPushEngine({ graphql, client, state, vault });
+
+		const changes: FileChange[] = [{ path: "big.bin", type: "create" }];
+
+		await expect(engine.push(changes, commitOptions)).rejects.toThrow(
+			"Reference update failed: not a fast-forward",
+		);
+		// State should NOT have been saved (push didn't complete)
+		expect(state.save).not.toHaveBeenCalled();
+		// createBlob, createTreeFromEntries, createCommitRest should have been called
+		expect(client.createBlob).toHaveBeenCalled();
+		expect(client.createTreeFromEntries).toHaveBeenCalled();
+		expect(client.createCommitRest).toHaveBeenCalled();
+	});
+
 	it("handles createBlob failure mid-batch without corrupting state", async () => {
 		const graphql = createMockGraphQL();
 		const client = createMockClient();
@@ -393,6 +418,10 @@ describe("PushEngine", () => {
 		await expect(engine.push(changes, commitOptions)).rejects.toThrow("API rate limit exceeded");
 		// State should NOT have been saved (push didn't complete)
 		expect(state.save).not.toHaveBeenCalled();
+		// No partial state updates: setSHA and setHeadOid should not be called
+		expect(state.setSHA).not.toHaveBeenCalled();
+		expect(state.setHeadOid).not.toHaveBeenCalled();
+		expect(state.setLastSyncedAt).not.toHaveBeenCalled();
 	});
 
 	it("stores correct remoteSha (git blob SHA) in cache after push", async () => {
@@ -434,6 +463,39 @@ describe("PushEngine", () => {
 			path: "huge.bin",
 			size: oversized,
 		});
+	});
+
+	it("routes file to REST fallback when sizeHint is under 50MB but content exceeds 1.5MB", async () => {
+		const graphql = createMockGraphQL();
+		const client = createMockClient();
+		const state = createMockState();
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const largeBytes = new Uint8Array(2 * 1024 * 1024); // 2MB content
+		vi.mocked(vault.readFileBinary).mockImplementation((path: string) => {
+			if (path === "big-note.md") return Promise.resolve(largeBytes.buffer as ArrayBuffer);
+			return Promise.resolve(new TextEncoder().encode(`content of ${path}`).buffer as ArrayBuffer);
+		});
+		const engine = createPushEngine({ graphql, client, state, vault, logger });
+
+		// sizeHint is 2MB — below 50MB cutoff, so file is NOT pre-skipped
+		const changes: FileChange[] = [
+			{ path: "big-note.md", type: "create", sizeHint: 2 * 1024 * 1024 },
+			{ path: "small.md", type: "create" },
+		];
+		const result = await engine.push(changes, commitOptions);
+
+		// Both files should be pushed
+		expect(result.pushed).toContain("big-note.md");
+		expect(result.pushed).toContain("small.md");
+		// big-note.md should go through REST (>1.5MB), small.md through GraphQL
+		expect(client.createBlob).toHaveBeenCalled();
+		expect(graphql.createCommit).toHaveBeenCalled();
+		// sizeHint pre-check warning should NOT have been logged
+		expect(logger.warn).not.toHaveBeenCalledWith(
+			"Skipping oversized file (pre-check)",
+			expect.anything(),
+		);
 	});
 
 	it("does not skip files just under 1.5MB GraphQL limit", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeDiff, groupIntoHunks, mergeHunks } from "./diff";
+import { computeDiff, type DiffHunk, groupIntoHunks, mergeHunks } from "./diff";
 
 describe("computeDiff", () => {
 	it("returns empty array for two empty strings", () => {
@@ -224,5 +224,164 @@ describe("mergeHunks", () => {
 		const result = mergeHunks(local, hunks, decisions);
 
 		expect(result).toBe("a\nold\nc");
+	});
+
+	it("handles change on first line with local decision", () => {
+		const local = "first\nb\nc";
+		const remote = "changed-first\nb\nc";
+		const diff = computeDiff(local, remote);
+		const hunks = groupIntoHunks(diff, 1);
+
+		const decisions = new Map<number, "local" | "remote">([[0, "local"]]);
+		const result = mergeHunks(local, hunks, decisions);
+
+		expect(result).toBe("first\nb\nc");
+	});
+
+	it("handles change on first line with remote decision", () => {
+		const local = "first\nb\nc";
+		const remote = "changed-first\nb\nc";
+		const diff = computeDiff(local, remote);
+		const hunks = groupIntoHunks(diff, 1);
+
+		const decisions = new Map<number, "local" | "remote">([[0, "remote"]]);
+		const result = mergeHunks(local, hunks, decisions);
+
+		expect(result).toBe("changed-first\nb\nc");
+	});
+
+	it("handles change on last line with local decision", () => {
+		const local = "a\nb\nlast";
+		const remote = "a\nb\nchanged-last";
+		const diff = computeDiff(local, remote);
+		const hunks = groupIntoHunks(diff, 1);
+
+		const decisions = new Map<number, "local" | "remote">([[0, "local"]]);
+		const result = mergeHunks(local, hunks, decisions);
+
+		expect(result).toBe("a\nb\nlast");
+	});
+
+	it("handles change on last line with remote decision", () => {
+		const local = "a\nb\nlast";
+		const remote = "a\nb\nchanged-last";
+		const diff = computeDiff(local, remote);
+		const hunks = groupIntoHunks(diff, 1);
+
+		const decisions = new Map<number, "local" | "remote">([[0, "remote"]]);
+		const result = mergeHunks(local, hunks, decisions);
+
+		expect(result).toBe("a\nb\nchanged-last");
+	});
+
+	it("handles hunk with localLine undefined on same lines", () => {
+		// Manually construct a hunk with a "same" line where localLine is undefined.
+		// This tests the fallback branch at line 151-152 in mergeHunks.
+		const local = "a\nb\nc";
+		const hunks: DiffHunk[] = [
+			{
+				lines: [
+					{ type: "same", text: "a", localLine: 1, remoteLine: 1 },
+					{ type: "add", text: "inserted", remoteLine: 2 },
+					{ type: "same", text: "b", localLine: undefined, remoteLine: 3 },
+				],
+				localStart: 1,
+				localEnd: 1,
+				remoteStart: 1,
+				remoteEnd: 3,
+			},
+		];
+
+		const decisions = new Map<number, "local" | "remote">([[0, "local"]]);
+		// Should not crash and should include the "same" lines in output
+		const result = mergeHunks(local, hunks, decisions);
+		expect(result).toContain("a");
+		expect(result).toContain("b");
+	});
+
+	it("handles hunk with localLine undefined on remove lines (remote decision)", () => {
+		// Edge case: remove line with undefined localLine in the remote decision path.
+		// This tests the fallback at line 165-167 in mergeHunks.
+		const local = "a\nb\nc";
+		const hunks: DiffHunk[] = [
+			{
+				lines: [
+					{ type: "same", text: "a", localLine: 1, remoteLine: 1 },
+					{ type: "remove", text: "b", localLine: undefined },
+					{ type: "add", text: "B", remoteLine: 2 },
+					{ type: "same", text: "c", localLine: 3, remoteLine: 3 },
+				],
+				localStart: 1,
+				localEnd: 3,
+				remoteStart: 1,
+				remoteEnd: 3,
+			},
+		];
+
+		const decisions = new Map<number, "local" | "remote">([[0, "remote"]]);
+		// Should not crash even when localLine is undefined on remove lines
+		const result = mergeHunks(local, hunks, decisions);
+		expect(result).toContain("a");
+		expect(result).toContain("B");
+		expect(result).toContain("c");
+	});
+
+	it("preserves unchanged lines between multiple separate hunks", () => {
+		const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+		const local = lines.join("\n");
+		const remoteLines = [...lines];
+		remoteLines[2] = "changed 3";
+		remoteLines[17] = "changed 18";
+		const remote = remoteLines.join("\n");
+
+		const diff = computeDiff(local, remote);
+		const hunks = groupIntoHunks(diff, 2);
+		expect(hunks).toHaveLength(2);
+
+		const decisions = new Map<number, "local" | "remote">([
+			[0, "remote"],
+			[1, "remote"],
+		]);
+		const result = mergeHunks(local, hunks, decisions);
+		const resultLines = result.split("\n");
+
+		// Changed lines should be remote versions
+		expect(resultLines[2]).toBe("changed 3");
+		expect(resultLines[17]).toBe("changed 18");
+
+		// Unchanged lines between hunks should be preserved
+		expect(resultLines[0]).toBe("line 1");
+		expect(resultLines[7]).toBe("line 8");
+		expect(resultLines[9]).toBe("line 10");
+		expect(resultLines[13]).toBe("line 14");
+	});
+
+	it("returns original local text when hunks array is empty", () => {
+		const local = "a\nb\nc\nd";
+		const decisions = new Map<number, "local" | "remote">();
+		const result = mergeHunks(local, [], decisions);
+
+		expect(result).toBe(local);
+	});
+
+	it("produces full remote version when all hunks are set to remote", () => {
+		const lines = Array.from({ length: 15 }, (_, i) => `line ${i + 1}`);
+		const local = lines.join("\n");
+		const remoteLines = [...lines];
+		remoteLines[1] = "remote 2";
+		remoteLines[5] = "remote 6";
+		remoteLines[10] = "remote 11";
+		const remote = remoteLines.join("\n");
+
+		const diff = computeDiff(local, remote);
+		const hunks = groupIntoHunks(diff, 2);
+
+		const decisions = new Map<number, "local" | "remote">();
+		for (let i = 0; i < hunks.length; i++) {
+			decisions.set(i, "remote");
+		}
+		const result = mergeHunks(local, hunks, decisions);
+
+		expect(result).toBe(remote);
 	});
 });

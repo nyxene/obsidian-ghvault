@@ -408,6 +408,77 @@ describe("GistModal", () => {
 		expect(scopeNotice).toBeDefined();
 	});
 
+	it("share with Public radio selected passes isPublic: true", async () => {
+		const client = mockClient();
+		const modal = new GistModal(
+			{} as never,
+			"notes/test.md",
+			"test.md",
+			"# Hello",
+			client as never,
+		);
+		modal.onOpen();
+
+		const promise = modal.waitForResult();
+
+		// Find visibility group and trigger "Public" radio change
+		const visGroup = findByCls(
+			modal.contentEl as unknown as MockElement,
+			"ghvault-gist-visibility",
+		);
+		expect(visGroup).toHaveLength(1);
+		// The radio inputs are nested: visGroup > label > input
+		// publicLabel is the 3rd child (after "Visibility:" label and secretLabel)
+		const publicLabel = visGroup[0].children[2];
+		const publicRadio = publicLabel.children[0];
+		// Trigger change event on public radio
+		for (const handler of publicRadio.listeners.change ?? []) {
+			handler();
+		}
+
+		// Click Share
+		const shareBtn = findByCls(modal.contentEl as unknown as MockElement, "mod-cta");
+		await Promise.all((shareBtn[0].listeners.click ?? []).map((handler) => handler()));
+
+		expect(client.createGist).toHaveBeenCalledWith({
+			filename: "test.md",
+			content: "# Hello",
+			description: "test.md",
+			isPublic: true,
+		});
+
+		const result = await promise;
+		expect(result).not.toBeNull();
+		expect(result?.record.isPublic).toBe(true);
+	});
+
+	it("clipboard failure does not crash and shows URL in notice", async () => {
+		Object.defineProperty(globalThis, "navigator", {
+			value: { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } },
+			writable: true,
+			configurable: true,
+		});
+
+		const client = mockClient();
+		const modal = new GistModal(
+			{} as never,
+			"notes/test.md",
+			"test.md",
+			"# Hello",
+			client as never,
+		);
+		modal.onOpen();
+
+		const promise = modal.waitForResult();
+		const shareBtn = findByCls(modal.contentEl as unknown as MockElement, "mod-cta");
+		await Promise.all((shareBtn[0].listeners.click ?? []).map((handler) => handler()));
+		await promise;
+
+		// Should show URL in notice instead of "copied to clipboard"
+		const urlNotice = noticeLog.find((n) => n.message.includes("gist.github.com/g1"));
+		expect(urlNotice).toBeDefined();
+	});
+
 	it("non-403 error shows generic failure message", async () => {
 		const client = mockClient({
 			createGist: vi.fn().mockRejectedValue(new Error("Server error")),

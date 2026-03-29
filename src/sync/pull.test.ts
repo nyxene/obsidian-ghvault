@@ -1817,6 +1817,153 @@ describe("PullEngine", () => {
 		});
 	});
 
+	describe("ZIP SHA integrity — file excluded from result", () => {
+		beforeEach(() => {
+			vi.mocked(computeGitBlobSha).mockReset();
+			vi.mocked(computeHashFromBuffer).mockReset();
+			vi.mocked(computeHashFromBuffer).mockResolvedValue("content-hash");
+			vi.mocked(processZipEntries).mockReset();
+		});
+
+		it("excludes file with wrong SHA from created/modified and logs error", async () => {
+			const files = [
+				{ path: "good-0.md", sha: "sha-0", size: 100 },
+				{ path: "good-1.md", sha: "sha-1", size: 100 },
+				{ path: "good-2.md", sha: "sha-2", size: 100 },
+				{ path: "good-3.md", sha: "sha-3", size: 100 },
+				{ path: "good-4.md", sha: "sha-4", size: 100 },
+				{ path: "tampered.md", sha: "sha-tampered", size: 100 },
+			];
+			const client = createMockClient(files);
+			const state = createMockState();
+			const vault = createMockVault();
+			const logger = createMockLogger();
+
+			// Mock per-file fallback to also fail for tampered file
+			vi.mocked(client.getFileContent).mockImplementation((path: string) => {
+				if (path === "tampered.md") {
+					return Promise.reject(new Error("Content unavailable"));
+				}
+				const entry = files.find((f) => f.path === path);
+				const sha = entry?.sha ?? "unknown";
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce(sha);
+				return Promise.resolve({
+					content: btoa(`content of ${path}`),
+					sha,
+					size: 100,
+				});
+			});
+
+			vi.mocked(processZipEntries).mockImplementation(async (_buf, onEntry) => {
+				for (const f of files) {
+					if (f.path === "tampered.md") {
+						// Return WRONG SHA for tampered file
+						vi.mocked(computeGitBlobSha).mockResolvedValueOnce("wrong-sha-mismatch");
+					} else {
+						vi.mocked(computeGitBlobSha).mockResolvedValueOnce(f.sha);
+					}
+					await onEntry(f.path, new TextEncoder().encode(`content of ${f.path}`));
+				}
+				return files.length;
+			});
+
+			const engine = new PullEngine({
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const result = await engine.pull("main");
+
+			// tampered.md should appear in errors (SHA mismatch from ZIP + fallback network error)
+			const tamperErrors = result.errors.filter((e) => e.path === "tampered.md");
+			expect(tamperErrors.length).toBeGreaterThanOrEqual(1);
+			// SHA integrity error should be logged
+			expect(logger.error).toHaveBeenCalledWith("SHA integrity check failed (ZIP)", {
+				path: "tampered.md",
+				expected: "sha-tampered",
+				actual: "wrong-sha-mismatch",
+			});
+			// Good files should still be created
+			expect(result.created).toContain("good-0.md");
+			expect(result.created).toContain("good-4.md");
+			// tampered.md should NOT be in created (both ZIP and fallback failed)
+			expect(result.created).not.toContain("tampered.md");
+			// State should not have SHA entry for tampered file
+			expect(state.setSHA).not.toHaveBeenCalledWith("tampered.md", expect.anything());
+		});
+	});
+
+	describe("fetchTreeForRef via getRemoteChanges", () => {
+		it("returns empty entries when getTree throws GitHubNotFoundError", async () => {
+			const client = createMockClient([]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "ref-sha" });
+			vi.mocked(client.getCommit).mockResolvedValue({ sha: "ref-sha", treeSha: "tree-sha" });
+			vi.mocked(client.getTree).mockRejectedValue(new GitHubNotFoundError("tree-sha"));
+			// Force the full tree path by making compareCommits diverge
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "diverged",
+				aheadBy: 1,
+				files: [],
+				headSha: "ref-sha",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const logger = createMockLogger();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger,
+				syncFolder: "",
+			});
+
+			const changes = await engine.getRemoteChanges("main");
+
+			expect(changes).toHaveLength(0);
+			expect(logger.info).toHaveBeenCalledWith("Tree is empty (no files in repo)");
+		});
+
+		it("logs warning when tree is truncated via fetchTreeForRef", async () => {
+			const client = createMockClient([{ path: "a.md", sha: "sha-a" }]);
+			vi.mocked(client.getRef).mockResolvedValue({ ref: "refs/heads/main", sha: "ref-sha" });
+			vi.mocked(client.getCommit).mockResolvedValue({ sha: "ref-sha", treeSha: "tree-sha" });
+			vi.mocked(client.getTree).mockResolvedValue({
+				entries: [{ path: "a.md", sha: "sha-a", mode: "100644", type: "blob", size: 100 }],
+				truncated: true,
+			});
+			// Force full tree path
+			vi.mocked(client.compareCommits).mockResolvedValue({
+				status: "diverged",
+				aheadBy: 1,
+				files: [],
+				headSha: "ref-sha",
+			});
+
+			const state = createMockState();
+			vi.mocked(state.getHeadOid).mockReturnValue("old-head");
+
+			const logger = createMockLogger();
+			const engine = new PullEngine({
+				client,
+				state,
+				vault: createMockVault(),
+				logger,
+				syncFolder: "",
+			});
+
+			await engine.getRemoteChanges("main");
+
+			expect(logger.warn).toHaveBeenCalledWith(
+				"Tree response truncated — some files may be missed",
+			);
+		});
+	});
+
 	describe("pullIncremental edge cases", () => {
 		beforeEach(() => {
 			vi.mocked(computeGitBlobSha).mockReset();
