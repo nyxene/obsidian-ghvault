@@ -23,6 +23,21 @@ const BASE_URL = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
 const VALID_COMPARE_STATUSES = new Set(["ahead", "behind", "diverged", "identical"]);
+
+const TRUSTED_GITHUB_DOMAINS = [
+	"github.com",
+	"uploads.github.com",
+	"objects.githubusercontent.com",
+];
+
+function isTrustedGitHubUrl(url: string): boolean {
+	try {
+		const hostname = new URL(url).hostname;
+		return TRUSTED_GITHUB_DOMAINS.some((d) => hostname === d || hostname.endsWith(`.${d}`));
+	} catch {
+		return false;
+	}
+}
 const VALID_FILE_STATUSES = new Set(["added", "modified", "removed", "renamed"]);
 const VALID_BUILD_TYPES = new Set<string>(["workflow", "legacy"]);
 
@@ -338,6 +353,9 @@ export class GitHubClient {
 		filename: string,
 		data: ArrayBuffer,
 	): Promise<{ downloadUrl: string; size: number }> {
+		if (!isTrustedGitHubUrl(uploadUrl)) {
+			throw new Error(`Untrusted upload URL domain: ${uploadUrl}`);
+		}
 		this.rateLimiter.assertCanMakeRequest("rest");
 		// Strip {?name,label} template from upload URL and append filename
 		const cleanUrl = uploadUrl.replace(/\{[^}]*\}/, "");
@@ -424,6 +442,9 @@ export class GitHubClient {
 	}
 
 	async downloadReleaseAsset(downloadUrl: string): Promise<ArrayBuffer> {
+		if (!isTrustedGitHubUrl(downloadUrl)) {
+			throw new Error(`Untrusted download URL domain: ${downloadUrl}`);
+		}
 		this.rateLimiter.assertCanMakeRequest("rest");
 		this.logger.debug("GitHub REST downloadReleaseAsset", { url: downloadUrl });
 		const response = await requestWithTimeout(

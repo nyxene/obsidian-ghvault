@@ -1051,6 +1051,13 @@ describe("GitHubClient", () => {
 			expect(arg.method).toBe("POST");
 			expect(arg.headers["Content-Type"]).toBe("application/zip");
 		});
+
+		it("rejects untrusted upload URL domain", async () => {
+			const client = createClient();
+			await expect(
+				client.uploadReleaseAsset("https://evil.com/steal", "file.zip", new ArrayBuffer(8)),
+			).rejects.toThrow("Untrusted upload URL domain");
+		});
 	});
 
 	describe("listReleases", () => {
@@ -1189,6 +1196,13 @@ describe("GitHubClient", () => {
 			const arg = lastCall[0] as { url: string; headers: Record<string, string> };
 			expect(arg.url).toContain("vault-backup.zip");
 			expect(arg.headers.Accept).toBe("application/octet-stream");
+		});
+
+		it("rejects untrusted download URL domain", async () => {
+			const client = createClient();
+			await expect(client.downloadReleaseAsset("https://evil.com/steal-token")).rejects.toThrow(
+				"Untrusted download URL domain",
+			);
 		});
 	});
 
