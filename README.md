@@ -63,7 +63,7 @@ Most Obsidian-to-GitHub solutions wrap the `git` CLI, which means they only work
 > [!NOTE]
 > GHVault is in active development. Test on a non-critical repository first.
 
-1. **Install** — download from [Releases](https://github.com/nyxene/obsidian-ghvault/releases), extract into `.obsidian/plugins/ghvault/`, enable in Settings
+1. **Install** — Settings → Community Plugins → Browse → search **GHVault** → Install → Enable
 2. **Token** — create a [fine-grained PAT](https://github.com/settings/tokens?type=beta) with Contents (read/write) permission for your repo
 3. **Configure** — open Settings → GHVault, enter token, owner, repo name, click **Test Connection**
 4. **Sync** — click the GHVault ribbon icon or run `GHVault: Sync` from the command palette
