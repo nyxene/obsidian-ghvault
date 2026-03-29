@@ -320,6 +320,51 @@ describe("PullEngine", () => {
 		expect(state.setSHA).not.toHaveBeenCalled();
 	});
 
+	it("accepts file when SHA integrity check passes (real computeGitBlobSha)", async () => {
+		// Restore real computeGitBlobSha for this test
+		vi.mocked(computeGitBlobSha).mockRestore();
+		const { computeGitBlobSha: realComputeGitBlobSha } =
+			await vi.importActual<typeof import("../utils/hash")>("../utils/hash");
+		vi.mocked(computeGitBlobSha).mockImplementation(realComputeGitBlobSha);
+
+		// Compute the real git blob SHA for "hello world" content
+		// Git blob SHA = SHA-1("blob <size>\0<content>")
+		// For "hello world" (11 bytes): blob 11\0hello world
+		const content = "hello world";
+		const contentBytes = new TextEncoder().encode(content);
+		const blobPrefix = `blob ${contentBytes.length}\0`;
+		const prefixBytes = new TextEncoder().encode(blobPrefix);
+		const fullBlob = new Uint8Array(prefixBytes.length + contentBytes.length);
+		fullBlob.set(prefixBytes, 0);
+		fullBlob.set(contentBytes, prefixBytes.length);
+		const hashBuffer = await crypto.subtle.digest("SHA-1", fullBlob);
+		const realSha = Array.from(new Uint8Array(hashBuffer))
+			.map((b) => b.toString(16).padStart(2, "0"))
+			.join("");
+
+		const client = createMockClient([{ path: "valid.md", sha: realSha }]);
+		vi.mocked(client.getFileContent).mockResolvedValue({
+			content: btoa(content),
+			sha: realSha,
+			size: contentBytes.length,
+		});
+
+		const state = createMockState({});
+		const vault = createMockVault();
+		const logger = createMockLogger();
+		const engine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+
+		const result = await engine.pull("main");
+
+		expect(result.created).toEqual(["valid.md"]);
+		expect(result.errors).toEqual([]);
+		expect(vault.writeFile).toHaveBeenCalledWith("valid.md", content);
+		expect(state.setSHA).toHaveBeenCalledWith(
+			"valid.md",
+			expect.objectContaining({ remoteSha: realSha }),
+		);
+	});
+
 	it("skips file exceeding 50MB after download in pullPerFile", async () => {
 		const oversizedBytes = 51 * 1024 * 1024;
 		const client = createMockClient([{ path: "huge.bin", sha: "sha-huge", size: 100 }]);

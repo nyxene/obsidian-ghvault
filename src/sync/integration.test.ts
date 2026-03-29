@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../github/client";
 import type { GitHubGraphQL } from "../github/graphql";
-import type { ConflictDecision, ConflictInfo, ConflictStrategy, SHACacheEntry } from "../types";
+import {
+	type ConflictDecision,
+	type ConflictInfo,
+	type ConflictStrategy,
+	GitHubAuthError,
+	type SHACacheEntry,
+} from "../types";
 import { computeGitBlobSha } from "../utils/hash";
 import type { Logger } from "../utils/logger";
 import { ChangeQueue } from "./change-queue";
@@ -927,6 +933,80 @@ describe("Sync integration", () => {
 			expect(vault.files.get("remote.md")).toBe("remote content");
 			// State from pull should have been persisted (pull saves before push runs)
 			expect(state.getHeadOid()).toBe("aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33");
+		});
+	});
+
+	describe("auth error mid-sync aborts cleanly", () => {
+		it("throws GitHubAuthError during pull getFileContent, collects error per-file, mutex released", async () => {
+			const { engine, vault, client } = createIntegrationSetup({
+				remoteFiles: [
+					{ path: "first.md", sha: "sha-first", content: "first content", size: 13 },
+					{ path: "second.md", sha: "sha-second", content: "second content", size: 14 },
+				],
+			});
+
+			// First file succeeds, second file throws GitHubAuthError
+			let callCount = 0;
+			vi.mocked(client.getFileContent).mockImplementation((_path: string) => {
+				callCount++;
+				if (callCount > 1) {
+					return Promise.reject(new GitHubAuthError());
+				}
+				vi.mocked(computeGitBlobSha).mockResolvedValueOnce("sha-first");
+				return Promise.resolve({
+					content: btoa("first content"),
+					sha: "sha-first",
+					size: 13,
+				});
+			});
+
+			const result = await engine.sync();
+
+			// First file should be written successfully
+			expect(vault.files.get("first.md")).toBe("first content");
+			// Second file should have auth error collected (per-file catch)
+			expect(result.pull.errors).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						path: "second.md",
+						error: expect.stringContaining("Authentication failed"),
+					}),
+				]),
+			);
+			// Mutex should be released
+			expect(engine.isSyncing).toBe(false);
+			// No data corruption — first file was written correctly
+			expect(result.pull.created).toContain("first.md");
+		});
+
+		it("aborts sync entirely when getRef throws GitHubAuthError, mutex released", async () => {
+			const { engine, vault, client, storage } = createIntegrationSetup({
+				localFiles: [{ path: "local.md", content: "local safe" }],
+				remoteFiles: [
+					{ path: "remote.md", sha: "sha-remote", content: "remote content", size: 14 },
+				],
+			});
+
+			// Pre-populate state so getRemoteChanges calls getRef
+			storage.data = {
+				syncState: {
+					lastRemoteHeadSha: "1100220033004400550066007700880099001100",
+					lastSyncedAt: 1000,
+					cache: {},
+				},
+			};
+
+			// getRef throws auth error — this happens before any file download
+			vi.mocked(client.getRef).mockRejectedValue(new GitHubAuthError());
+
+			await expect(engine.sync()).rejects.toThrow(GitHubAuthError);
+
+			// Mutex should be released after error
+			expect(engine.isSyncing).toBe(false);
+			// No vault writes should have happened
+			expect(vault.writeFile).not.toHaveBeenCalled();
+			// Local file should remain untouched
+			expect(vault.files.get("local.md")).toBe("local safe");
 		});
 	});
 

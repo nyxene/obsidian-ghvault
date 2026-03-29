@@ -1728,4 +1728,57 @@ describe("GitHubClient", () => {
 			expect(cache.has("/repos/testowner/testrepo/git/ref/heads/main")).toBe(true);
 		});
 	});
+
+	describe("malformed response handling", () => {
+		it("throws proper error when response JSON is null", async () => {
+			mockRequest.mockResolvedValue({
+				json: null,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(createClient().getRef("main")).rejects.toThrow(
+				"Invalid API response: expected JSON",
+			);
+		});
+
+		it("throws proper error when response JSON is undefined", async () => {
+			mockRequest.mockResolvedValue({
+				json: undefined,
+				headers: {
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "<html>Bad Gateway</html>",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await expect(createClient().getRepoInfo()).rejects.toThrow(
+				"Invalid API response: expected JSON",
+			);
+		});
+
+		it("throws validation error when HTML error page is parsed as JSON object", async () => {
+			// When a proxy returns HTML, Obsidian may parse it as a JSON object
+			// with unexpected shape — validation catches this
+			mockResponse({ html: "<html>502 Bad Gateway</html>" });
+			await expect(createClient().getFileContent("test.md")).rejects.toThrow(
+				"Invalid file content response for test.md",
+			);
+		});
+
+		it("throws validation error on getRef when response is non-ref object", async () => {
+			// Simulates CDN/proxy returning a JSON error body instead of ref data
+			mockResponse({ error: "service unavailable", status: 503 });
+			await expect(createClient().getRef("main")).rejects.toThrow("Invalid ref response");
+		});
+	});
 });
