@@ -1690,4 +1690,42 @@ describe("GitHubClient", () => {
 			expect(entry.etag).toBe('"etag-2"');
 		});
 	});
+
+	describe("ETag cache eviction", () => {
+		it("evicts oldest entry when cache exceeds 500 entries", async () => {
+			const client = createClient();
+			// biome-ignore lint/suspicious/noExplicitAny: access private field for testing
+			const cache = (client as any).etagCache as Map<string, { etag: string; data: unknown }>;
+
+			// Pre-fill cache with 500 entries
+			for (let i = 0; i < 500; i++) {
+				cache.set(`/path-${i}`, { etag: `"etag-${i}"`, data: null });
+			}
+			expect(cache.size).toBe(500);
+
+			// Trigger one more cache write via a real request
+			mockResponse({ ref: "refs/heads/main", object: { sha: "abc" } });
+			mockRequest.mockResolvedValueOnce({
+				json: { ref: "refs/heads/main", object: { sha: "abc" } },
+				headers: {
+					etag: '"etag-new"',
+					"x-ratelimit-limit": "5000",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "1700000000",
+				},
+				status: 200,
+				text: "",
+				arrayBuffer: new ArrayBuffer(0),
+			} as ReturnType<typeof requestUrl> extends Promise<infer R> ? R : never);
+
+			await client.getRef("main");
+
+			// Cache should not exceed 500
+			expect(cache.size).toBeLessThanOrEqual(500);
+			// Oldest entry should have been evicted
+			expect(cache.has("/path-0")).toBe(false);
+			// New entry should exist
+			expect(cache.has("/repos/testowner/testrepo/git/ref/heads/main")).toBe(true);
+		});
+	});
 });
