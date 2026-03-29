@@ -1025,4 +1025,54 @@ describe("conflict modal diff view", () => {
 		// Should show change summary with +N −N format
 		expect(diffText).toMatch(/\+\d+.*−\d+/);
 	});
+
+	it("large file (>2000 lines) renders diff instantly via fallback mode", async () => {
+		// Generate 2001 lines — triggers DIFF_MAX_CELLS guard (2001*2001 > 4M)
+		// Each line ~10 bytes → ~20KB total, well under DIFF_MAX_SIZE (100KB)
+		const localLines = Array.from({ length: 2001 }, (_, i) => `local ${i + 1}`);
+		const remoteLines = Array.from({ length: 2001 }, (_, i) => `remote ${i + 1}`);
+		const localContent = localLines.join("\n");
+		const remoteContent = remoteLines.join("\n");
+		const remoteSha = await computeGitBlobSha(remoteContent);
+
+		await obsidianPage.write("diff-large.md", localContent);
+
+		await injectConflictMock(
+			[{ path: "diff-large.md", sha: remoteSha, content: remoteContent, size: remoteContent.length }],
+			{
+				"diff-large.md": {
+					remoteSha: "sha-old",
+					localContentHash: "old-hash",
+					lastSyncedAt: 1000,
+					size: 100,
+					isBinary: false,
+				},
+			},
+		);
+
+		triggerSync();
+		await browser.pause(1000);
+
+		// Measure time to expand diff — should be near-instant (fallback O(n+m))
+		const pathCell = await browser.$(".ghvault-conflict-path");
+		const startTime = Date.now();
+		await pathCell.click();
+		await browser.pause(1500);
+		const elapsed = Date.now() - startTime;
+
+		// Diff panel should appear without freezing (< 3s including pause)
+		const diffPanel = await browser.$(".ghvault-diff-panel");
+		expect(await diffPanel.isDisplayed()).toBe(true);
+		expect(elapsed).toBeLessThan(3000);
+
+		// Fallback mode: all lines are remove or add (no "same" lines in LCS sense)
+		// The diff should contain both local and remote content
+		const diffText = await diffPanel.getText();
+		expect(diffText).toContain("local 1");
+		expect(diffText).toContain("remote 1");
+
+		// Change summary should show large numbers (~2001 additions and removals)
+		expect(diffText).toMatch(/\+\d{3,}/); // at least 3-digit number of additions
+		expect(diffText).toMatch(/−\d{3,}/); // at least 3-digit number of removals
+	});
 });
