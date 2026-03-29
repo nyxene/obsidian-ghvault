@@ -143,7 +143,9 @@ export class GistManagerModal extends Modal {
 			try {
 				const content = await this.readFileContent(entry.vaultPath);
 				if (content.length > 1024 * 1024) {
-					new Notice("GHVault: File too large for Gist (max 1MB)");
+					new Notice(
+						"GHVault: File grew past 1MB limit. Delete this gist and re-share a smaller version.",
+					);
 					updateBtn.disabled = false;
 					updateBtn.setText("Update");
 					return;

@@ -3025,6 +3025,13 @@ describe("GHVaultPlugin", () => {
 			expect(plugin.settings.dispatchEventType).toBe("myscriptevent");
 		});
 
+		it("sanitizes dispatchEventType — preserves dots in event type", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "my.deploy.event" },
+			});
+			expect(plugin.settings.dispatchEventType).toBe("my.deploy.event");
+		});
+
 		it("sanitizes dispatchEventType — falls back to default when all chars stripped", async () => {
 			const { plugin } = await loadPlugin({
 				settings: { dispatchEventType: "!@#$%^&*()" },
