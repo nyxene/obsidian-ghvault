@@ -105,4 +105,12 @@ describe("computeHashFromBuffer", () => {
 		expect(hash).toHaveLength(64);
 		expect(hash).toMatch(/^[0-9a-f]{64}$/);
 	});
+
+	it("handles Uint8Array subarray with non-zero byteOffset", async () => {
+		const full = new TextEncoder().encode("prefixhello");
+		const sub = full.subarray(6); // "hello" with byteOffset=6
+		const expected = await computeHash("hello");
+		const result = await computeHashFromBuffer(sub);
+		expect(result).toBe(expected);
+	});
 });
