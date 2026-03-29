@@ -893,6 +893,7 @@ export default class GHVaultPlugin extends Plugin {
 
 		let restored = 0;
 		await processZipEntries(zipBuffer, async (path, data) => {
+			if (!isSafePath(path)) return;
 			const existing = this.app.vault.getFileByPath(path);
 			if (existing) {
 				await this.app.vault.modifyBinary(existing, data.buffer as ArrayBuffer);

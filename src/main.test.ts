@@ -2470,6 +2470,45 @@ describe("GHVaultPlugin", () => {
 			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Restored 2 files"));
 			expect(notice).toBeDefined();
 		});
+
+		it("restoreFromBackup skips path-traversal entries", async () => {
+			const { processZipEntries } = await import("./utils/zip");
+
+			const { plugin, vault } = await loadPlugin(CONFIGURED_SETTINGS);
+
+			vi.mocked(processZipEntries).mockImplementationOnce(async (_buf, onEntry) => {
+				await onEntry("safe.md", new Uint8Array([1, 2]));
+				await onEntry("../../../etc/passwd", new Uint8Array([9, 9]));
+				await onEntry("notes/../../escape.md", new Uint8Array([8, 8]));
+				return 3;
+			});
+
+			const { TFile: TFileClass } = await import("obsidian");
+			vault.getFileByPath = vi.fn().mockReturnValue(null);
+			vault.getFolderByPath = vi.fn().mockReturnValue(null);
+			vault.modifyBinary = vi.fn().mockResolvedValue(undefined);
+			vault.createBinary = vi.fn().mockResolvedValue(new TFileClass());
+			vault.createFolder = vi.fn().mockResolvedValue(undefined);
+
+			const backup = {
+				id: 1,
+				tagName: "backup-malicious",
+				name: "Malicious Backup",
+				createdAt: "2026-01-01T12:00:00Z",
+				htmlUrl: "https://github.com/owner/repo/releases/tag/backup-malicious",
+				assetName: "vault-backup.zip",
+				assetSize: 1024,
+				assetDownloadUrl:
+					"https://github.com/owner/repo/releases/download/backup-malicious/vault-backup.zip",
+			};
+
+			await (plugin as AnyPlugin).restoreFromBackup(backup);
+
+			// Only safe.md should be written — traversal paths skipped
+			expect(vault.createBinary).toHaveBeenCalledTimes(1);
+			const notice = noticeLog.find((n: NoticeRecord) => n.message.includes("Restored 1 files"));
+			expect(notice).toBeDefined();
+		});
 	});
 
 	describe("publish dispatch debounce", () => {
