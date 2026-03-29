@@ -273,4 +273,11 @@ describe("isValidExcludePattern", () => {
 		expect(isValidExcludePattern("path with spaces")).toBe(false);
 		expect(isValidExcludePattern("$(command)")).toBe(false);
 	});
+
+	it("rejects patterns with path traversal", () => {
+		expect(isValidExcludePattern("../../etc/passwd")).toBe(false);
+		expect(isValidExcludePattern("notes/../../escape")).toBe(false);
+		expect(isValidExcludePattern("..")).toBe(false);
+		expect(isValidExcludePattern("a/../b")).toBe(false);
+	});
 });
