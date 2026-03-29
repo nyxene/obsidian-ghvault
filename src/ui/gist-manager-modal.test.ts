@@ -301,6 +301,33 @@ describe("GistManagerModal", () => {
 		expect(notice).toBeDefined();
 	});
 
+	it("update rejects file larger than 1MB", async () => {
+		const registry: Record<string, GistRecord> = {
+			"notes/big.md": makeGistRecord({ vaultPath: "notes/big.md" }),
+		};
+		const bigContent = "x".repeat(1024 * 1024 + 1);
+		const readFileContent = vi.fn().mockResolvedValue(bigContent);
+		const client = mockClient();
+
+		const modal = new GistManagerModal(
+			{} as never,
+			client as never,
+			registry,
+			vi.fn(),
+			readFileContent,
+		);
+		modal.onOpen();
+
+		const root = modal.contentEl as unknown as MockElement;
+		const updateBtn = findByText(root, "Update");
+
+		await Promise.all((updateBtn?.listeners.click ?? []).map((handler) => handler()));
+
+		expect(client.updateGist).not.toHaveBeenCalled();
+		const notice = noticeLog.find((n) => n.message.includes("too large"));
+		expect(notice).toBeDefined();
+	});
+
 	it("non-404 update error shows failure notice", async () => {
 		const registry: Record<string, GistRecord> = {
 			"notes/a.md": makeGistRecord({ vaultPath: "notes/a.md" }),
