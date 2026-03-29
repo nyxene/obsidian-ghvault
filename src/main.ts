@@ -1039,7 +1039,7 @@ export default class GHVaultPlugin extends Plugin {
 					typeof raw.dispatchEventType === "string" && raw.dispatchEventType.trim()
 						? raw.dispatchEventType
 								.trim()
-								.replace(/[^a-zA-Z0-9_-]/g, "")
+								.replace(/[^a-zA-Z0-9._-]/g, "")
 								.slice(0, 100) || DEFAULT_SETTINGS.dispatchEventType
 						: DEFAULT_SETTINGS.dispatchEventType,
 				pagesEnabled:

@@ -24,6 +24,9 @@ const API_VERSION = "2022-11-28";
 
 const VALID_COMPARE_STATUSES = new Set(["ahead", "behind", "diverged", "identical"]);
 
+// Trusted domains for Bearer token transmission. GitHub Enterprise Server
+// uses custom domains — if GHE support is added, this list must be
+// configurable or derived from the API base URL.
 const TRUSTED_GITHUB_DOMAINS = [
 	"github.com",
 	"uploads.github.com",

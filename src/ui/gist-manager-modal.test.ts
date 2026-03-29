@@ -324,8 +324,9 @@ describe("GistManagerModal", () => {
 		await Promise.all((updateBtn?.listeners.click ?? []).map((handler) => handler()));
 
 		expect(client.updateGist).not.toHaveBeenCalled();
-		const notice = noticeLog.find((n) => n.message.includes("too large"));
+		const notice = noticeLog.find((n) => n.message.includes("1MB limit"));
 		expect(notice).toBeDefined();
+		expect(notice?.message).toContain("Delete this gist");
 	});
 
 	it("non-404 update error shows failure notice", async () => {
