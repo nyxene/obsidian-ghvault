@@ -343,4 +343,60 @@ describe("FileHistoryModal", () => {
 		// Only 1 call (initial)
 		expect(provider.listFileCommits).toHaveBeenCalledTimes(1);
 	});
+
+	describe("formatRelativeDate year path", () => {
+		it("shows year-based format for date >1 year ago", async () => {
+			const commit: FileCommitInfo[] = [
+				{
+					sha: "old1",
+					message: "ancient commit",
+					authorName: "Alice",
+					date: new Date(Date.now() - 86400000 * 400).toISOString(), // ~13 months ago
+					htmlUrl: "https://github.com/test/repo/commit/old1",
+				},
+			];
+			const modal = new FileHistoryModal({} as never, "f.md", "main", createMockProvider(commit));
+			await modal.onOpen();
+
+			const rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+			const meta = rows[0].children[1];
+			expect(meta.text).toContain("1y ago");
+		});
+
+		it("shows year-based format for date exactly 1 year ago", async () => {
+			const commit: FileCommitInfo[] = [
+				{
+					sha: "old2",
+					message: "one year commit",
+					authorName: "Bob",
+					date: new Date(Date.now() - 86400000 * 365).toISOString(), // exactly 12 months
+					htmlUrl: "https://github.com/test/repo/commit/old2",
+				},
+			];
+			const modal = new FileHistoryModal({} as never, "f.md", "main", createMockProvider(commit));
+			await modal.onOpen();
+
+			const rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+			const meta = rows[0].children[1];
+			expect(meta.text).toContain("1y ago");
+		});
+
+		it("shows multi-year format for date >2 years ago", async () => {
+			const commit: FileCommitInfo[] = [
+				{
+					sha: "old3",
+					message: "very old commit",
+					authorName: "Carol",
+					date: new Date(Date.now() - 86400000 * 800).toISOString(), // ~26 months ago
+					htmlUrl: "https://github.com/test/repo/commit/old3",
+				},
+			];
+			const modal = new FileHistoryModal({} as never, "f.md", "main", createMockProvider(commit));
+			await modal.onOpen();
+
+			const rows = findAllByCls(modal.contentEl as unknown as MockEl, "ghvault-file-history-row");
+			const meta = rows[0].children[1];
+			expect(meta.text).toContain("2y ago");
+		});
+	});
 });

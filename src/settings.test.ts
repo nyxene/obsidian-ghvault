@@ -1038,6 +1038,43 @@ describe("GHVaultSettingTab", () => {
 			expect(callbacks.onSave).not.toHaveBeenCalled();
 		});
 
+		it("dispatch toggle shows/hides event type setting", async () => {
+			const { tab, callbacks } = createTab({ dispatchOnPush: false });
+			tab.display();
+
+			const eventSetting = findSettingByName("Event type");
+			const eventToggleSpy = vi.spyOn(eventSetting.settingEl, "toggle");
+			eventToggleSpy.mockClear();
+
+			const dispatchSetting = findSettingByName("Trigger workflow on push");
+			await dispatchSetting.toggleComponents[0].simulateChange(true);
+
+			expect(eventToggleSpy).toHaveBeenCalledWith(true);
+			expect(callbacks.onSave).toHaveBeenCalled();
+		});
+
+		it("SSG and Deploy are hidden on initial render when pagesEnabled=false", () => {
+			const { tab } = createTab({ pagesEnabled: false });
+			tab.display();
+
+			const ssgSetting = findSettingByName("Static site generator");
+			const deploySetting = findSettingByName("Deploy");
+
+			expect(ssgSetting.settingEl.toggle).toHaveBeenCalledWith(false);
+			expect(deploySetting.settingEl.toggle).toHaveBeenCalledWith(false);
+		});
+
+		it("SSG and Deploy are shown on initial render when pagesEnabled=true", () => {
+			const { tab } = createTab({ pagesEnabled: true });
+			tab.display();
+
+			const ssgSetting = findSettingByName("Static site generator");
+			const deploySetting = findSettingByName("Deploy");
+
+			expect(ssgSetting.settingEl.toggle).toHaveBeenCalledWith(true);
+			expect(deploySetting.settingEl.toggle).toHaveBeenCalledWith(true);
+		});
+
 		it("Deploy button resets text and re-enables on error", async () => {
 			const onGenerateWorkflow = vi.fn().mockRejectedValue(new Error("deploy failed"));
 			const { tab } = createTab({ pagesEnabled: true }, { onGenerateWorkflow });
