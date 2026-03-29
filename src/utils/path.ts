@@ -31,6 +31,7 @@ const VALID_PATTERN_RE = /^(\*\*\/)?[a-zA-Z0-9._\-/]+(\*\*)?$|^\*\.[a-zA-Z0-9]+$
 
 export function isValidExcludePattern(pattern: string): boolean {
 	if (!pattern || pattern.startsWith("#")) return true;
+	if (pattern.includes("..")) return false;
 	return VALID_PATTERN_RE.test(pattern);
 }
 
