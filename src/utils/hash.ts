@@ -6,8 +6,13 @@ export async function computeHash(content: string): Promise<string> {
 }
 
 export async function computeHashFromBuffer(data: ArrayBuffer | Uint8Array): Promise<string> {
-	const input: BufferSource = data instanceof Uint8Array ? new Uint8Array(data) : data;
-	const buffer = await crypto.subtle.digest("SHA-256", input);
+	const source: BufferSource =
+		data instanceof Uint8Array
+			? data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+				? (data.buffer as ArrayBuffer)
+				: (data.buffer as ArrayBuffer).slice(data.byteOffset, data.byteOffset + data.byteLength)
+			: data;
+	const buffer = await crypto.subtle.digest("SHA-256", source);
 	const bytes = new Uint8Array(buffer);
 	return Array.from(bytes)
 		.map((b) => b.toString(16).padStart(2, "0"))
