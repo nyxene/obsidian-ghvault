@@ -242,7 +242,7 @@ async function injectMockWithFiles(
 	files: Array<{ path: string; sha: string; content: string; size: number }>,
 ): Promise<void> {
 	await browser.executeObsidian(
-		({ plugins }, remoteFiles, hs, po, ts) => {
+		async ({ plugins }, remoteFiles, hs, po, ts) => {
 			const plugin = plugins.ghvault as any;
 			const engine = plugin.syncEngine;
 			if (!engine) throw new Error("syncEngine is null");
@@ -255,6 +255,11 @@ async function injectMockWithFiles(
 				size: f.size,
 			}));
 
+			// Reset sync state so engine sees new remote changes
+			const data = (await plugin.loadData()) || {};
+			data.syncState = { lastRemoteHeadSha: "", lastSyncedAt: 0, cache: {} };
+			await plugin.saveData(data);
+
 			engine.pullEngine.client = {
 				getRef: async () => ({ ref: "refs/heads/main", sha: hs }),
 				getCommit: async () => ({ sha: hs, treeSha: ts }),
@@ -265,6 +270,7 @@ async function injectMockWithFiles(
 					return { content: btoa(file.content), sha: file.sha, size: file.size };
 				},
 				createFile: async () => ({ sha: "init-sha", commitSha: hs }),
+				compareCommits: async () => { throw new Error("Not implemented in E2E mock"); },
 			};
 
 			const graphqlState = { called: false, lastArgs: null as any };

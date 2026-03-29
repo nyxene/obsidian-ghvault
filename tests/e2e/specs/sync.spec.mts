@@ -8,6 +8,7 @@ import { obsidianPage } from "wdio-obsidian-service";
 const HEAD_SHA = "aa00bb11cc22dd33ee44ff55aa00bb11cc22dd33";
 const PUSH_OID = "bb11cc22dd33ee44ff55aa00bb11cc22dd33ee44";
 const TREE_SHA = "cc22dd33ee44ff55aa00bb11cc22dd33ee44ff55";
+const HEAD_SHA_2 = "dd33ee44ff55aa00bb11cc22dd33ee44ff55aa00";
 
 // ---------------------------------------------------------------------------
 // Crypto helpers — run inside Obsidian via executeObsidian
@@ -51,6 +52,21 @@ async function computeContentHash(content: string): Promise<string> {
 			.map((b: number) => b.toString(16).padStart(2, "0"))
 			.join("");
 	}, content);
+}
+
+// ---------------------------------------------------------------------------
+// Vault cleanup: remove all .md and binary files except Welcome.md
+// ---------------------------------------------------------------------------
+
+async function cleanVaultFiles(): Promise<void> {
+	await browser.executeObsidian(async ({ app }) => {
+		const files = app.vault.getFiles();
+		for (const file of files) {
+			if (file.path === "Welcome.md") continue;
+			await app.vault.trash(file, true);
+		}
+	});
+	await browser.pause(200);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +121,8 @@ async function injectMocks(
 			if (cacheData) {
 				const data = (await plugin.loadData()) || {};
 				data.syncState = {
-					lastRemoteHeadSha: hs as string,
+					// Use a different SHA than getRef returns so engine detects new changes
+					lastRemoteHeadSha: "0000000000000000000000000000000000000001",
 					lastSyncedAt: 1000,
 					cache: cacheData,
 				};
@@ -131,6 +148,7 @@ async function injectMocks(
 					return { content: b64, sha: file.sha, size: file.size };
 				},
 				createFile: async () => ({ sha: "init-sha", commitSha: hs }),
+				compareCommits: async () => { throw new Error("Not implemented in E2E mock"); },
 			};
 
 			const graphqlState = { called: false, lastArgs: null as any };
@@ -659,6 +677,7 @@ describe("rename detection", () => {
 	});
 
 	it("detects remote rename (delete + create with same SHA)", async () => {
+		await cleanVaultFiles();
 		await ensureSyncEngine();
 
 		const content = "remote rename test";
@@ -671,9 +690,11 @@ describe("rename detection", () => {
 		await runSync();
 
 		// Now remote renamed: old path gone, new path with same SHA
+		// Use HEAD_SHA_2 because first sync may have pushed Welcome.md,
+		// updating headOid to PUSH_OID — getRef must return a different SHA
 		await injectMocks(
 			[{ path: "remote-new.md", sha: contentSha, content, size: content.length }],
-			{ headSha: PUSH_OID },
+			{ headSha: HEAD_SHA_2 },
 		);
 
 		const result = await runSync();
@@ -883,6 +904,7 @@ describe("binary file support", () => {
 	});
 
 	it("binary and text files sync together in same cycle", async () => {
+		await cleanVaultFiles();
 		await ensureSyncEngine();
 
 		const textContent = "# Hello";

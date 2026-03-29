@@ -7,7 +7,8 @@ import { browser, expect } from "@wdio/globals";
 async function resetPluginSettings(): Promise<void> {
 	await browser.executeObsidian(async ({ plugins }) => {
 		const plugin = plugins.ghvault as any;
-		plugin.settings = {
+		// Mutate existing object to preserve SettingTab's reference
+		Object.assign(plugin.settings, {
 			githubToken: "",
 			owner: "",
 			repo: "",
@@ -25,7 +26,7 @@ async function resetPluginSettings(): Promise<void> {
 			pagesGenerator: "quartz",
 			pagesUrl: "",
 			publishDebounce: 600,
-		};
+		});
 		const data = (await plugin.loadData()) || {};
 		data.settings = { ...plugin.settings };
 		await plugin.saveData(data);
