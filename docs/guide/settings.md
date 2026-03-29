@@ -210,3 +210,22 @@ Minimum severity for log messages written to `ghvault.log` in your vault root.
 | **Error** | Failures only |
 
 The log file is automatically excluded from sync.
+
+---
+
+## Limits
+
+Built-in limits to protect against excessive resource usage:
+
+| Limit | Value | What happens |
+|-------|-------|-------------|
+| Max file size (sync) | 50 MB | Skipped with warning |
+| Max file size (gist) | 1 MB | Rejected with notice |
+| Max backup size | 500 MB | Rejected with notice |
+| ETag cache entries | 500 | Oldest evicted (FIFO) |
+| Log file size | 5000 lines | Auto-rotated to 3000 |
+| Large changeset warning | 10,000 files | Warning logged, all files still synced |
+| GraphQL commit payload | 2 MB | Auto-chunked into batches |
+| REST fallback threshold | 1.5 MB | Files >1.5MB use Git Data API |
+| Request timeout | 30 s | Aborted with error |
+| Sync cooldown | 3 s | "Please wait" notice |

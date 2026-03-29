@@ -1481,6 +1481,54 @@ describe("Sync integration", () => {
 		});
 	});
 
+	describe("large changeset warning", () => {
+		it("logs warning for >10000 remote files but pulls all of them", async () => {
+			// Create >10000 remote files
+			const remoteFiles = Array.from({ length: 10_001 }, (_, i) => ({
+				path: `file-${String(i).padStart(5, "0")}.md`,
+				sha: `sha-${i}`,
+				content: `content ${i}`,
+				size: 10,
+			}));
+
+			const vault = createMockVaultAdapter([]);
+			const client = createMockGitHubClient(remoteFiles);
+			const graphql = createMockGraphQL();
+			const storage = createInMemoryStorage();
+			const state = new SyncStateManager(storage);
+			const logger = createMockLogger();
+
+			const pullEngine = new PullEngine({ client, state, vault, logger, syncFolder: "" });
+			const pushEngine = new PushEngine({
+				graphql,
+				client,
+				state,
+				vault,
+				logger,
+				syncFolder: "",
+			});
+
+			const engine = new SyncEngine({
+				pullEngine,
+				pushEngine,
+				state,
+				vault,
+				logger,
+				commitOptions: { branch: "main", owner: "testowner", repo: "testrepo" },
+			});
+
+			const result = await engine.sync();
+
+			// All files should be pulled (no truncation)
+			expect(result.pull.created.length).toBe(10_001);
+			// Warning should be logged
+			expect(logger.warn).toHaveBeenCalledWith(
+				"Large pull detected — this may take a while",
+				expect.objectContaining({ files: 10_001, threshold: 10_000 }),
+			);
+		});
+	});
+
 	describe("incremental pull via Compare API", () => {
 		it("pulls incrementally when compareCommits returns ahead status", async () => {
 			const { engine, vault, client, storage, state } = createIntegrationSetup({

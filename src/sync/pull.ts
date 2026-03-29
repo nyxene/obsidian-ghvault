@@ -35,6 +35,7 @@ export interface PullEngineOptions {
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const LARGE_CHANGESET_THRESHOLD = 10_000;
 const PULL_CONCURRENCY = 8;
 const ZIP_MIN_FILES = 5;
 const ZIP_MAX_SIZE = 100 * 1024 * 1024; // 100MB
@@ -377,6 +378,12 @@ export class PullEngine {
 
 		const cache = this.state.getAllSHAs();
 		const allChanges = computeRemoteChanges(mappedEntries, cache, this.excludePatterns);
+		if (allChanges.length > LARGE_CHANGESET_THRESHOLD) {
+			this.logger.warn("Large pull detected — this may take a while", {
+				files: allChanges.length,
+				threshold: LARGE_CHANGESET_THRESHOLD,
+			});
+		}
 
 		const changes = skipPaths?.size ? allChanges.filter((c) => !skipPaths.has(c.path)) : allChanges;
 
