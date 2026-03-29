@@ -577,7 +577,8 @@ export class GHVaultSettingTab extends PluginSettingTab {
 					.setPlaceholder("vault-synced")
 					.setValue(this.settings.dispatchEventType)
 					.onChange(async (value) => {
-						this.settings.dispatchEventType = value.trim();
+						const sanitized = value.trim().replace(/[^a-zA-Z0-9_-]/g, "");
+						this.settings.dispatchEventType = sanitized.slice(0, 100) || "vault-synced";
 						await this.callbacks.onSave(this.settings);
 					}),
 			);
