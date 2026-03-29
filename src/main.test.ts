@@ -3018,6 +3018,20 @@ describe("GHVaultPlugin", () => {
 			expect(plugin.settings.dispatchEventType).toBe("my-event");
 		});
 
+		it("sanitizes dispatchEventType — strips special characters", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "my<script>event" },
+			});
+			expect(plugin.settings.dispatchEventType).toBe("myscriptevent");
+		});
+
+		it("sanitizes dispatchEventType — falls back to default when all chars stripped", async () => {
+			const { plugin } = await loadPlugin({
+				settings: { dispatchEventType: "!@#$%^&*()" },
+			});
+			expect(plugin.settings.dispatchEventType).toBe(DEFAULT_SETTINGS.dispatchEventType);
+		});
+
 		it("parses pagesEnabled boolean", async () => {
 			const { plugin } = await loadPlugin({
 				settings: { pagesEnabled: true },

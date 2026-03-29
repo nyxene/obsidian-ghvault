@@ -1037,7 +1037,10 @@ export default class GHVaultPlugin extends Plugin {
 						: DEFAULT_SETTINGS.dispatchOnPush,
 				dispatchEventType:
 					typeof raw.dispatchEventType === "string" && raw.dispatchEventType.trim()
-						? raw.dispatchEventType.trim()
+						? raw.dispatchEventType
+								.trim()
+								.replace(/[^a-zA-Z0-9_-]/g, "")
+								.slice(0, 100) || DEFAULT_SETTINGS.dispatchEventType
 						: DEFAULT_SETTINGS.dispatchEventType,
 				pagesEnabled:
 					typeof raw.pagesEnabled === "boolean" ? raw.pagesEnabled : DEFAULT_SETTINGS.pagesEnabled,
