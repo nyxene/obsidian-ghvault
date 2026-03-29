@@ -64,7 +64,7 @@ export class Logger {
 			const lineCount = content.split("\n").length;
 			this.writeCount = lineCount;
 			if (lineCount > MAX_LOG_LINES) {
-				this.rotateLog();
+				await this.rotateLog();
 			}
 		} catch {
 			// Log file does not exist yet
@@ -120,37 +120,34 @@ export class Logger {
 
 		this.writeCount++;
 		if (this.writeCount >= MAX_LOG_LINES) {
-			this.rotateLog();
+			void this.rotateLog();
 		}
 	}
 
-	private rotateLog(): void {
+	private async rotateLog(): Promise<void> {
 		this.rotating = true;
-		this.app.vault.adapter
-			.read(LOG_FILE)
-			.then((content) => {
-				const lines = content.split("\n");
-				if (lines.length > MAX_LOG_LINES) {
-					const trimmed = lines.slice(lines.length - TRIM_TO_LINES).join("\n");
-					return this.app.vault.adapter.write(LOG_FILE, `${trimmed}\n`);
-				}
-			})
-			.catch(() => {
-				// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
-				console.warn("[GHVault] Log rotation failed");
-			})
-			.finally(() => {
-				this.rotating = false;
-				this.writeCount = 0;
-				if (this.writeQueue.length > 0) {
-					const queued = this.writeQueue.join("\n");
-					this.writeQueue = [];
-					this.app.vault.adapter.append(LOG_FILE, `${queued}\n`).catch(() => {
-						// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
-						console.warn("[GHVault] Log queue flush failed");
-					});
-					this.writeCount = queued.split("\n").length;
-				}
-			});
+		try {
+			const content = await this.app.vault.adapter.read(LOG_FILE);
+			const lines = content.split("\n");
+			if (lines.length > MAX_LOG_LINES) {
+				const trimmed = lines.slice(lines.length - TRIM_TO_LINES).join("\n");
+				await this.app.vault.adapter.write(LOG_FILE, `${trimmed}\n`);
+				this.writeCount = TRIM_TO_LINES;
+			}
+		} catch {
+			// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
+			console.warn("[GHVault] Log rotation failed");
+		} finally {
+			this.rotating = false;
+			if (this.writeQueue.length > 0) {
+				const queued = this.writeQueue.join("\n");
+				this.writeQueue = [];
+				await this.app.vault.adapter.append(LOG_FILE, `${queued}\n`).catch(() => {
+					// biome-ignore lint/suspicious/noConsole: intentional fallback when log file is inaccessible
+					console.warn("[GHVault] Log queue flush failed");
+				});
+				this.writeCount += queued.split("\n").length;
+			}
+		}
 	}
 }

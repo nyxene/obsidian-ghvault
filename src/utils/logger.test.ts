@@ -275,6 +275,56 @@ describe("Logger", () => {
 		});
 	});
 
+	describe("writeCount accuracy after rotation", () => {
+		it("writeCount reflects TRIM_TO_LINES plus queued entries", async () => {
+			const read = app.vault.adapter.read as ReturnType<typeof vi.fn>;
+			const write = app.vault.adapter.write as ReturnType<typeof vi.fn>;
+			const append = app.vault.adapter.append as ReturnType<typeof vi.fn>;
+
+			// Init near limit
+			read.mockResolvedValueOnce(Array.from({ length: 4999 }, () => "x").join("\n"));
+			await logger.init();
+
+			// Make rotation slow
+			const bigLog = Array.from({ length: 5001 }, (_, i) => `line-${i}`).join("\n");
+			let resolveRead: ((value: string) => void) | undefined;
+			read.mockImplementationOnce(
+				() =>
+					new Promise<string>((resolve) => {
+						resolveRead = resolve;
+					}),
+			);
+			write.mockResolvedValue(undefined);
+
+			// Trigger rotation + queue 2 writes
+			logger.info("trigger");
+			logger.info("queued-1");
+			logger.info("queued-2");
+
+			resolveRead?.(bigLog);
+
+			await vi.waitFor(() => {
+				expect(append.mock.calls.length).toBeGreaterThan(1);
+			});
+
+			// After rotation: writeCount should be TRIM_TO_LINES (3000) + 2 queued
+			// Verify by writing enough to NOT trigger another rotation (writeCount < 5000)
+			// If writeCount were incorrectly 0+2=2, the next 4998 writes would not trigger
+			// rotation. But with correct 3002, only ~1998 more writes should trigger it.
+			write.mockClear();
+			read.mockResolvedValue(bigLog);
+
+			// Write 1999 entries — should trigger rotation (3002 + 1999 = 5001 > 5000)
+			for (let i = 0; i < 1999; i++) {
+				logger.info(`fill-${i}`);
+			}
+
+			await vi.waitFor(() => {
+				expect(write).toHaveBeenCalled();
+			});
+		});
+	});
+
 	describe("error string truncation", () => {
 		it("truncates long string values in data to 500 chars", () => {
 			const longError = "A".repeat(1000);
