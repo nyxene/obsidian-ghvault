@@ -1,0 +1,45 @@
+name: Sync docs to mneme
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**']
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout mneme
+        uses: actions/checkout@v4
+        with:
+          repository: nyxene/mneme
+          token: ${{ secrets.MNEME_SYNC_TOKEN }}
+          path: mneme
+
+      - name: Sync docs → _sensors
+        run: |
+          PROJECT=$(basename "${{ github.repository }}")
+          mkdir -p "mneme/_sensors/${PROJECT}"
+          rsync -av --delete --exclude='.obsidian/' \
+            source/docs/ "mneme/_sensors/${PROJECT}/"
+
+      - name: Push
+        run: |
+          PROJECT=$(basename "${{ github.repository }}")
+          cd mneme
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "sync(${PROJECT}): ${{ github.event.head_commit.message || 'manual sync' }}"
+            git pull --rebase
+            git push
+          fi
