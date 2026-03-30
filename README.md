@@ -53,7 +53,7 @@ Most Obsidian-to-GitHub solutions wrap the `git` CLI, which means they only work
 
 ## Requirements
 
-- Obsidian **1.5.0+** (desktop or mobile)
+- Obsidian **1.12.3+** (desktop or mobile)
 - A GitHub repository (public or private)
 - GitHub Personal Access Token ([fine-grained](https://github.com/settings/tokens?type=beta) recommended)
 - Internet connection (no offline sync)
