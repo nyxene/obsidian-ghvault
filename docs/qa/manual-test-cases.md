@@ -14,9 +14,40 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 **Result tracking:** Use `✅ PASS`, `❌ FAIL (#issue)`, `⏭️ SKIP (reason)`.
 
+**Group index:**
+
+| Group | Concern | Prefix |
+|-------|---------|--------|
+| A | Settings & Connection | TC-SET |
+| B | First Sync | TC-FSYNC |
+| C | Pull (Remote → Local) | TC-PULL |
+| D | Push (Local → Remote) | TC-PUSH |
+| E | Bidirectional Sync | TC-BIDI |
+| F | Conflict Resolution | TC-CONF |
+| G | Rename Detection | TC-REN |
+| H | File History | TC-HIST |
+| I | Sync Folder | TC-SFLD |
+| J | Exclude Patterns & Filters | TC-FILT |
+| K | Auto-Sync | TC-AUTO |
+| L | Remote Pull Check | TC-RPULL |
+| M | Crash Recovery | TC-CRASH |
+| N | Large & Binary Files | TC-FILE |
+| O | Share as Gist | TC-GIST |
+| P | Vault Backup | TC-BACKUP |
+| Q | Repository Dispatch | TC-DISPATCH |
+| R | GitHub Pages Publishing | TC-PAGES |
+| S | Sync Status Panel | TC-PANEL |
+| T | Performance | TC-PERF |
+| U | Guards & Error Handling | TC-GUARD |
+| V | Mobile | TC-MOB |
+| W | Plugin Lifecycle | TC-LIFE |
+| X | Obsidian Compliance | TC-OBSDN |
+
+> Groups Y–Z reserved for future features.
+
 ---
 
-## Group A: First Launch & Settings
+## Group A: Settings & Connection
 
 ### TC-SET-001: Plugin loads with correct defaults
 **Priority:** P0
@@ -59,7 +90,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group B: First Sync — Empty Vault → Populated Repo
+## Group B: First Sync
 
 ### TC-FSYNC-001: Pull all files from populated repo
 **Priority:** P0
@@ -94,10 +125,6 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Sync from empty vault
 **Expected:** Binary file pulled and readable in vault
 
----
-
-## Group C: First Sync — Populated Vault → Empty Repo
-
 ### TC-FSYNC-005: Push local files to empty repo
 **Priority:** P0
 **Platform:** Both
@@ -114,9 +141,57 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Open the commit on GitHub
 **Expected:** "Verified" badge visible (GraphQL commits are auto-signed by GitHub)
 
+### TC-FSYNC-007: First sync uses ZIP for large repo
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** syncFolder empty, remote repo with >5 files, total <100MB
+**Steps:**
+1. Fresh install, configure settings, sync
+**Expected:** Sync completes. All remote files pulled. Debug log shows "ZIP pull started".
+
+### TC-FSYNC-008: ZIP fallback to per-file on error
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** syncFolder empty, >5 remote files
+**Steps:**
+1. Simulate ZIP download failure (e.g. network drop during download)
+**Expected:** Sync still completes via per-file fallback. Warning in log.
+
+### TC-FSYNC-009: Subfolder sync uses per-file (not ZIP)
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** syncFolder = "docs", >5 remote files
+**Steps:**
+1. Sync
+**Expected:** Files pulled individually. No ZIP download attempt.
+
+### TC-FSYNC-010: First sync — identical files on both sides
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Fresh plugin install (no sync state), vault has `note.md`, repo has `note.md` with same content
+**Steps:**
+1. Sync
+**Expected:** No conflicts. File is cached. No pull or push for `note.md`. Other unique files sync normally.
+
+### TC-FSYNC-011: First sync — different files on both sides
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Fresh plugin install, vault has `note.md` with "local", repo has `note.md` with "remote"
+**Steps:**
+1. Sync
+**Expected:** `note.md` is a conflict. Conflict strategy applies (skip/local-wins/remote-wins/ask).
+
+### TC-FSYNC-012: First sync — mixed files
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Fresh plugin install. Vault: `shared.md`, `local-only.md`. Repo: `shared.md` (same content), `remote-only.md`
+**Steps:**
+1. Sync
+**Expected:** `shared.md` cached (no conflict). `local-only.md` pushed. `remote-only.md` pulled.
+
 ---
 
-## Group D: Pull — Remote → Vault
+## Group C: Pull (Remote → Local)
 
 ### TC-PULL-001: New remote file pulled
 **Priority:** P0
@@ -147,7 +222,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group E: Push — Vault → Remote
+## Group D: Push (Local → Remote)
 
 ### TC-PUSH-001: New local file pushed
 **Priority:** P0
@@ -178,7 +253,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group F: Bidirectional
+## Group E: Bidirectional Sync
 
 ### TC-BIDI-001: Pull + push in same cycle
 **Priority:** P0
@@ -200,7 +275,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group G: Conflict Detection
+## Group F: Conflict Resolution
 
 ### TC-CONF-001: Conflict detected and reported
 **Priority:** P0
@@ -323,29 +398,24 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Click "Conflict strategy" dropdown
 **Expected:** Four options: Skip, Local wins, Remote wins, Ask
 
-### TC-CONF-013: First sync — identical files on both sides
-**Priority:** P0
-**Platform:** Both
-**Preconditions:** Fresh plugin install (no sync state), vault has `note.md`, repo has `note.md` with same content
-**Steps:**
-1. Sync
-**Expected:** No conflicts. File is cached. No pull or push for `note.md`. Other unique files sync normally.
-
-### TC-CONF-014: First sync — different files on both sides
-**Priority:** P0
-**Platform:** Both
-**Preconditions:** Fresh plugin install, vault has `note.md` with "local", repo has `note.md` with "remote"
-**Steps:**
-1. Sync
-**Expected:** `note.md` is a conflict. Conflict strategy applies (skip/local-wins/remote-wins/ask).
-
-### TC-CONF-015: First sync — mixed files
+### TC-CONF-013: Ask strategy — per-hunk accept/reject in diff view
 **Priority:** P1
 **Platform:** Both
-**Preconditions:** Fresh plugin install. Vault: `shared.md`, `local-only.md`. Repo: `shared.md` (same content), `remote-only.md`
+**Preconditions:** Conflict strategy = "Ask", `shared.md` synced
 **Steps:**
-1. Sync
-**Expected:** `shared.md` cached (no conflict). `local-only.md` pushed. `remote-only.md` pulled.
+1. Edit `shared.md` locally: change line 2, keep line 5
+2. Edit `shared.md` on GitHub: keep line 2, change line 5
+3. Sync — modal appears
+4. Click on `shared.md` to expand inline diff view
+5. Verify color-coded changes (red = removed, green = added) with line numbers
+6. Click "Local" on the first hunk (line 2 change)
+7. Click "Remote" on the second hunk (line 5 change)
+8. Click "Resolve"
+**Expected:** Merged result contains local line 2 and remote line 5. File pushed to GitHub with merged content.
+
+---
+
+## Group G: Rename Detection
 
 ### TC-REN-001: Local rename detected
 **Priority:** P1
@@ -363,7 +433,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 **Steps:**
 1. Rename `doc.md` → `renamed-doc.md` on GitHub
 2. Sync
-**Expected:** Local file renamed (backlinks preserved if Obsidian supports). Notice shows "1 renamed".
+**Expected:** Local file renamed. Notice shows "1 renamed".
 
 ### TC-REN-003: Rename + different content is NOT a rename
 **Priority:** P1
@@ -373,6 +443,10 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Delete `file.md`, create `newfile.md` with different content
 2. Sync
 **Expected:** Treated as separate delete + create. Notice shows pushed/pulled counts, no "renamed".
+
+---
+
+## Group H: File History
 
 ### TC-HIST-001: File history shows commits for synced file
 **Priority:** P1
@@ -401,75 +475,9 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Scroll to bottom, click "Load more"
 **Expected:** Next 20 commits appended. Button hidden when no more.
 
-### TC-ZIP-001: First sync uses ZIP for large repo
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** syncFolder empty, remote repo with >5 files, total <100MB
-**Steps:**
-1. Fresh install, configure settings, sync
-**Expected:** Sync completes. All remote files pulled. Debug log shows "ZIP pull started".
-
-### TC-ZIP-002: ZIP fallback to per-file on error
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** syncFolder empty, >5 remote files
-**Steps:**
-1. Simulate ZIP download failure (e.g. network drop during download)
-**Expected:** Sync still completes via per-file fallback. Warning in log.
-
-### TC-ZIP-003: Subfolder sync uses per-file (not ZIP)
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** syncFolder = "docs", >5 remote files
-**Steps:**
-1. Sync
-**Expected:** Files pulled individually. No ZIP download attempt.
-
-### TC-EXCL-001: Custom exclude pattern prevents sync
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** Settings → Exclude patterns = "drafts/**"
-**Steps:**
-1. Create `drafts/note.md` in vault
-2. Sync
-**Expected:** `drafts/note.md` is NOT pushed to GitHub.
-
-### TC-EXCL-002: Custom exclude pattern with extension
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** Settings → Exclude patterns = "*.pdf"
-**Steps:**
-1. Create `report.pdf` in vault
-2. Sync
-**Expected:** `report.pdf` is NOT pushed. Other files sync normally.
-
-### TC-EXCL-003: Hardcoded excludes still work with custom patterns
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** Settings → Exclude patterns = "drafts/**"
-**Steps:**
-1. Sync
-**Expected:** `.obsidian/`, `.trash/`, `ghvault.log` still excluded. `drafts/` also excluded.
-
-### TC-PERF-001: First sync with 100+ files completes
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** Empty vault, remote repo with 100+ files, syncFolder empty
-**Steps:**
-1. Sync
-**Expected:** All files pulled. No timeout. Debug log shows ZIP or parallel download.
-
-### TC-PERF-002: Push 50+ changed files
-**Priority:** P1
-**Platform:** Both
-**Preconditions:** 50+ local files changed since last sync
-**Steps:**
-1. Sync
-**Expected:** Push completes. If chunked, log shows "Push chunked: N chunks".
-
 ---
 
-## Group H: Sync Folder
+## Group I: Sync Folder
 
 ### TC-SFLD-001: Only syncFolder files pulled
 **Priority:** P1
@@ -499,67 +507,51 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group I: Guards & Error Handling
+## Group J: Exclude Patterns & Filters
 
-### TC-GUARD-001: No settings configured
-**Priority:** P0
-**Platform:** Both
-**Preconditions:** Token, owner, or repo is empty
-**Steps:**
-1. Click sync
-**Expected:** Notice: "Configure settings first (token, owner, repo)"
-
-### TC-GUARD-002: Concurrent sync blocked
-**Priority:** P0
-**Platform:** Both
-**Steps:**
-1. Click sync
-2. Immediately click sync again while first is running
-**Expected:** Notice: "Sync already in progress"
-
-### TC-GUARD-003: Cooldown enforced
+### TC-FILT-001: Custom exclude pattern prevents sync
 **Priority:** P1
 **Platform:** Both
+**Preconditions:** Settings → Exclude patterns = "drafts/**"
 **Steps:**
-1. Sync successfully
-2. Click sync again within 5 seconds
-**Expected:** Notice: "Please wait before syncing again"
-
-### TC-GUARD-004: Network error with token redaction
-**Priority:** P1
-**Platform:** Both
-**Steps:**
-1. Disable WiFi/network
-2. Click sync
-**Expected:** Error notice shown, no token visible in the message
-
-### TC-GUARD-005: Expired/revoked token
-**Priority:** P2
-**Platform:** Both
-**Steps:**
-1. Revoke the PAT on GitHub
-2. Click sync
-**Expected:** Meaningful error notice (not raw API response), status bar shows "error"
-
----
-
-## Group J: Large Files
-
-### TC-LARGE-001: File ~2MB synced via fallback
-**Priority:** P1
-**Platform:** Desktop
-**Steps:**
-1. Add a ~2MB markdown file to vault
+1. Create `drafts/note.md` in vault
 2. Sync
-**Expected:** File pushed successfully (uses REST blob fallback, not GraphQL)
+**Expected:** `drafts/note.md` is NOT pushed to GitHub.
 
-### TC-LARGE-002: File >50MB skipped
-**Priority:** P2
-**Platform:** Desktop
+### TC-FILT-002: Custom exclude pattern with extension
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Settings → Exclude patterns = "*.pdf"
 **Steps:**
-1. Add a >50MB file to vault
+1. Create `report.pdf` in vault
 2. Sync
-**Expected:** File skipped, no crash, other files sync normally
+**Expected:** `report.pdf` is NOT pushed. Other files sync normally.
+
+### TC-FILT-003: Hardcoded excludes still work with custom patterns
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Settings → Exclude patterns = "drafts/**"
+**Steps:**
+1. Sync
+**Expected:** `.obsidian/`, `.trash/`, `ghvault.log` still excluded. `drafts/` also excluded.
+
+### TC-FILT-004: Frontmatter ghvault-sync: false excludes file
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Initial sync complete
+**Steps:**
+1. Create `private-note.md` with frontmatter `ghvault-sync: false`
+2. Sync
+**Expected:** `private-note.md` is NOT pushed to GitHub. Other files sync normally.
+
+### TC-FILT-005: Removing ghvault-sync: false re-includes file
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** `private-note.md` with `ghvault-sync: false` exists, not on GitHub
+**Steps:**
+1. Remove the `ghvault-sync: false` line from frontmatter
+2. Sync
+**Expected:** File is now pushed to GitHub.
 
 ---
 
@@ -667,7 +659,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group P: Remote Pull Check
+## Group L: Remote Pull Check
 
 ### TC-RPULL-001: Pull interval setting renders
 **Priority:** P0
@@ -696,14 +688,14 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Wait 30–60 seconds (do NOT manually sync)
 **Expected:** File appears in vault automatically, status bar flashes "syncing..." then returns to "idle"
 
-### TC-RPULL-004: No sync when remote unchanged
+### TC-RPULL-004: No sync when remote unchanged (ETag caching)
 **Priority:** P1
 **Platform:** Both
 **Preconditions:** Auto-sync enabled, pull interval = 30s, vault and repo in sync
 **Steps:**
 1. Wait 2+ minutes without any changes
 2. Check log file (debug level)
-**Expected:** No sync triggered, log shows periodic ref checks without sync actions
+**Expected:** No sync triggered. Log shows periodic ref checks returning 304 Not Modified (ETag cache hit — free, no rate limit cost).
 
 ### TC-RPULL-005: Backoff when idle
 **Priority:** P1
@@ -753,7 +745,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group Q: Crash Recovery
+## Group M: Crash Recovery
 
 ### TC-CRASH-001: Pending changes survive restart
 **Priority:** P0
@@ -804,100 +796,9 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group L: Mobile-Specific
+## Group N: Large & Binary Files
 
-### TC-MOB-001: Settings tab renders on mobile
-**Priority:** P0
-**Platform:** Mobile
-**Steps:**
-1. Install plugin on iOS or Android
-2. Open settings
-**Expected:** All fields visible and functional
-
-### TC-MOB-002: Sync works on mobile
-**Priority:** P0
-**Platform:** Mobile
-**Preconditions:** Valid settings configured
-**Steps:**
-1. Sync from mobile
-**Expected:** Files pulled/pushed correctly
-
-### TC-MOB-003: Create and push from mobile
-**Priority:** P1
-**Platform:** Mobile
-**Steps:**
-1. Create a new note on mobile
-2. Sync
-**Expected:** File appears on GitHub
-
-### TC-MOB-004: Background/foreground resilience
-**Priority:** P1
-**Platform:** Mobile
-**Steps:**
-1. Start a sync
-2. Switch to another app
-3. Return to Obsidian
-**Expected:** No crash, status bar shows correct state
-
-### TC-MOB-005: Slow network behavior
-**Priority:** P2
-**Platform:** Mobile
-**Steps:**
-1. Use throttled network (e.g., airplane mode toggle during sync)
-**Expected:** Error notice shown, no crash, can retry after
-
----
-
-## Group M: Plugin Lifecycle
-
-### TC-LIFE-001: Disable/enable preserves settings
-**Priority:** P1
-**Platform:** Both
-**Steps:**
-1. Configure settings and sync
-2. Disable plugin
-3. Re-enable plugin
-**Expected:** Settings preserved, sync engine rebuilt, status bar shows "idle"
-
-### TC-LIFE-002: Clean reinstall restores defaults
-**Priority:** P1
-**Platform:** Both
-**Steps:**
-1. Disable plugin
-2. Delete `data.json` from `.obsidian/plugins/ghvault/`
-3. Re-enable plugin
-**Expected:** All settings reset to defaults
-
----
-
-## Group N: Obsidian Community Plugin Compliance
-
-### TC-OBSDN-001: No innerHTML/outerHTML
-**Priority:** P0
-**Platform:** N/A (code audit)
-**Steps:**
-1. Run `npm run check:obsidian`
-**Expected:** "No innerHTML/outerHTML" — PASS
-
-### TC-OBSDN-002: No fetch() calls
-**Priority:** P0
-**Platform:** N/A (code audit)
-**Steps:**
-1. Run `npm run check:obsidian`
-**Expected:** "No fetch() calls" — PASS
-
-### TC-OBSDN-003: No Node.js imports
-**Priority:** P0
-**Platform:** N/A (code audit)
-**Steps:**
-1. Run `npm run check:obsidian`
-**Expected:** "No Node.js imports" — PASS
-
----
-
-## Group O: Binary File Support
-
-### TC-BIN-001: Pull PNG image from repo
+### TC-FILE-001: Pull PNG image from repo
 **Priority:** P0
 **Platform:** Both
 **Preconditions:** Repo contains a PNG image (e.g., `screenshot.png`)
@@ -905,7 +806,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Sync from empty vault
 **Expected:** Image file appears in vault, opens correctly in Obsidian
 
-### TC-BIN-002: Push local image to repo
+### TC-FILE-002: Push local image to repo
 **Priority:** P0
 **Platform:** Both
 **Preconditions:** Initial sync complete
@@ -914,7 +815,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Sync
 **Expected:** Image appears on GitHub, binary content intact (not corrupted)
 
-### TC-BIN-003: Modify binary file remotely and pull
+### TC-FILE-003: Modify binary file remotely and pull
 **Priority:** P1
 **Platform:** Both
 **Preconditions:** Image exists in both vault and repo
@@ -923,7 +824,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Sync in Obsidian
 **Expected:** Local image updated to match remote version
 
-### TC-BIN-004: PDF file round-trip
+### TC-FILE-004: PDF file round-trip
 **Priority:** P1
 **Platform:** Both
 **Steps:**
@@ -933,7 +834,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 4. Sync again (pull)
 **Expected:** PDF pushed and pulled correctly, readable after round-trip
 
-### TC-BIN-005: Mixed sync — text and binary files together
+### TC-FILE-005: Mixed sync — text and binary files together
 **Priority:** P1
 **Platform:** Both
 **Preconditions:** Repo has both .md and .png files
@@ -943,7 +844,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 3. Sync
 **Expected:** All 4 files synced correctly in both directions
 
-### TC-BIN-006: Binary file with null bytes in first 8KB
+### TC-FILE-006: Binary file with null bytes in first 8KB
 **Priority:** P2
 **Platform:** Desktop
 **Steps:**
@@ -951,9 +852,25 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Sync
 **Expected:** File detected as binary, pushed with correct encoding, pullable
 
+### TC-FILE-007: File ~2MB synced via REST fallback
+**Priority:** P1
+**Platform:** Desktop
+**Steps:**
+1. Add a ~2MB markdown file to vault
+2. Sync
+**Expected:** File pushed successfully (uses REST blob fallback, not GraphQL)
+
+### TC-FILE-008: File >50MB skipped
+**Priority:** P2
+**Platform:** Desktop
+**Steps:**
+1. Add a >50MB file to vault
+2. Sync
+**Expected:** File skipped, no crash, other files sync normally
+
 ---
 
-## Group H: Share as Gist
+## Group O: Share as Gist
 
 ### TC-GIST-001: Share note as secret gist via ribbon
 **Priority:** P1
@@ -1027,7 +944,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 **Preconditions:** At least one gist previously shared
 **Steps:**
 1. Click ribbon "Manage shared gists" (list icon)
-**Expected:** Manager modal opens showing all shared gists with file paths, descriptions, visibility badges (🔒/🌐), and action buttons.
+**Expected:** Manager modal opens showing all shared gists with file paths, descriptions, visibility badges, and action buttons.
 
 ### TC-GIST-009: Manage gists — copy URL
 **Priority:** P1
@@ -1072,7 +989,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 
 ---
 
-## Group I: Vault Backup
+## Group P: Vault Backup
 
 ### TC-BACKUP-001: Backup vault via ribbon
 **Priority:** P0
@@ -1181,7 +1098,9 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 1. Click "Backup vault" with files of various sizes
 **Expected:** Confirmation dialog shows correct file count and size (KB for small, MB for large).
 
-## Group J: Repository Dispatch
+---
+
+## Group Q: Repository Dispatch
 
 ### TC-DISPATCH-001: Dispatch fires after successful push
 **Priority:** P1
@@ -1222,7 +1141,9 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Check workflow run logs for payload
 **Expected:** Payload contains `branch`, `pushed` (array of pushed file paths), `deleted` (array), `commitOid` (SHA string).
 
-## Group K: GitHub Pages Publishing
+---
+
+## Group R: GitHub Pages Publishing
 
 ### TC-PAGES-001: Publishing settings appear when toggle enabled
 **Priority:** P0
@@ -1263,7 +1184,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Click "Open repo settings →" link
 **Expected:** Browser opens `https://github.com/{owner}/{repo}/settings/pages`. User can manually set Source to "GitHub Actions".
 
-### TC-PAGES-006: Generate workflow overwrites existing file
+### TC-PAGES-005: Generate workflow overwrites existing file
 **Priority:** P1
 **Platform:** Both
 **Preconditions:** `.github/workflows/deploy.yml` already exists in repo
@@ -1272,7 +1193,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Click "Generate"
 **Expected:** Existing file is overwritten with Hugo template. No 409 conflict error.
 
-### TC-PAGES-007: ghvault-publish: false excludes note from build
+### TC-PAGES-006: ghvault-publish: false excludes note from build
 **Priority:** P1
 **Platform:** Both
 **Preconditions:** Pages publishing active, site building successfully
@@ -1282,7 +1203,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 3. Check published site
 **Expected:** Note content does not appear on the site. File exists in repo but is excluded during build.
 
-### TC-PAGES-008: Full publish flow — edit to live site
+### TC-PAGES-007: Full publish flow — edit to live site
 **Priority:** P0
 **Platform:** Both
 **Preconditions:** Pages enabled, workflow generated, dispatch enabled
@@ -1293,7 +1214,7 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 4. Visit the Pages URL
 **Expected:** Note appears on the published site within a few minutes.
 
-### TC-PAGES-009: Jekyll uses legacy build (no workflow)
+### TC-PAGES-008: Jekyll uses legacy build (no workflow)
 **Priority:** P2
 **Platform:** Both
 **Preconditions:** Publishing enabled, SSG set to Jekyll
@@ -1302,3 +1223,198 @@ Test catalog for manual QA of GHVault. Each test has an ID, priority, and platfo
 2. Verify Generate button is hidden
 3. Click "Enable" for Pages
 **Expected:** Pages enabled with `build_type: "legacy"`. GitHub auto-builds with Jekyll. No workflow file needed.
+
+---
+
+## Group S: Sync Status Panel
+
+### TC-PANEL-001: Panel opens from command palette
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Open command palette (Ctrl/Cmd+P)
+2. Search "GHVault: Show sync status"
+3. Execute command
+**Expected:** Sidebar panel opens on the right side, showing file status list.
+
+### TC-PANEL-002: Panel shows file categories
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Vault has synced files, one pending local change, one conflict
+**Steps:**
+1. Open sync status panel
+**Expected:** Files categorized by status: conflicts, pending changes, untracked, synced. Each section shows file count.
+
+### TC-PANEL-003: Panel updates after sync
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Panel open, one file pending push
+**Steps:**
+1. Run sync
+2. Observe panel
+**Expected:** Pending file moves from "pending" to "synced" section after sync completes.
+
+### TC-PANEL-004: Panel shows correct state after conflict
+**Priority:** P2
+**Platform:** Both
+**Preconditions:** Panel open, conflict strategy = "Skip"
+**Steps:**
+1. Create a conflict (edit same file locally and on GitHub)
+2. Sync
+3. Observe panel
+**Expected:** Conflicted file appears in "conflicts" section.
+
+---
+
+## Group T: Performance
+
+### TC-PERF-001: First sync with 100+ files completes
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** Empty vault, remote repo with 100+ files, syncFolder empty
+**Steps:**
+1. Sync
+**Expected:** All files pulled. No timeout. Debug log shows ZIP or parallel download.
+
+### TC-PERF-002: Push 50+ changed files
+**Priority:** P1
+**Platform:** Both
+**Preconditions:** 50+ local files changed since last sync
+**Steps:**
+1. Sync
+**Expected:** Push completes. If chunked, log shows "Push chunked: N chunks".
+
+---
+
+## Group U: Guards & Error Handling
+
+### TC-GUARD-001: No settings configured
+**Priority:** P0
+**Platform:** Both
+**Preconditions:** Token, owner, or repo is empty
+**Steps:**
+1. Click sync
+**Expected:** Notice: "Configure settings first (token, owner, repo)"
+
+### TC-GUARD-002: Concurrent sync blocked
+**Priority:** P0
+**Platform:** Both
+**Steps:**
+1. Click sync
+2. Immediately click sync again while first is running
+**Expected:** Notice: "Sync already in progress"
+
+### TC-GUARD-003: Cooldown enforced
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Sync successfully
+2. Click sync again within 5 seconds
+**Expected:** Notice: "Please wait before syncing again"
+
+### TC-GUARD-004: Network error with token redaction
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Disable WiFi/network
+2. Click sync
+**Expected:** Error notice shown, no token visible in the message
+
+### TC-GUARD-005: Expired/revoked token
+**Priority:** P2
+**Platform:** Both
+**Steps:**
+1. Revoke the PAT on GitHub
+2. Click sync
+**Expected:** Meaningful error notice (not raw API response), status bar shows "error"
+
+---
+
+## Group V: Mobile
+
+### TC-MOB-001: Settings tab renders on mobile
+**Priority:** P0
+**Platform:** Mobile
+**Steps:**
+1. Install plugin on iOS or Android
+2. Open settings
+**Expected:** All fields visible and functional
+
+### TC-MOB-002: Sync works on mobile
+**Priority:** P0
+**Platform:** Mobile
+**Preconditions:** Valid settings configured
+**Steps:**
+1. Sync from mobile
+**Expected:** Files pulled/pushed correctly
+
+### TC-MOB-003: Create and push from mobile
+**Priority:** P1
+**Platform:** Mobile
+**Steps:**
+1. Create a new note on mobile
+2. Sync
+**Expected:** File appears on GitHub
+
+### TC-MOB-004: Background/foreground resilience
+**Priority:** P1
+**Platform:** Mobile
+**Steps:**
+1. Start a sync
+2. Switch to another app
+3. Return to Obsidian
+**Expected:** No crash, status bar shows correct state
+
+### TC-MOB-005: Slow network behavior
+**Priority:** P2
+**Platform:** Mobile
+**Steps:**
+1. Use throttled network (e.g., airplane mode toggle during sync)
+**Expected:** Error notice shown, no crash, can retry after
+
+---
+
+## Group W: Plugin Lifecycle
+
+### TC-LIFE-001: Disable/enable preserves settings
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Configure settings and sync
+2. Disable plugin
+3. Re-enable plugin
+**Expected:** Settings preserved, sync engine rebuilt, status bar shows "idle"
+
+### TC-LIFE-002: Clean reinstall restores defaults
+**Priority:** P1
+**Platform:** Both
+**Steps:**
+1. Disable plugin
+2. Delete `data.json` from `.obsidian/plugins/ghvault/`
+3. Re-enable plugin
+**Expected:** All settings reset to defaults
+
+---
+
+## Group X: Obsidian Compliance
+
+### TC-OBSDN-001: No innerHTML/outerHTML
+**Priority:** P0
+**Platform:** N/A (code audit)
+**Steps:**
+1. Run `npm run check:obsidian`
+**Expected:** "No innerHTML/outerHTML" — PASS
+
+### TC-OBSDN-002: No fetch() calls
+**Priority:** P0
+**Platform:** N/A (code audit)
+**Steps:**
+1. Run `npm run check:obsidian`
+**Expected:** "No fetch() calls" — PASS
+
+### TC-OBSDN-003: No Node.js imports
+**Priority:** P0
+**Platform:** N/A (code audit)
+**Steps:**
+1. Run `npm run check:obsidian`
+**Expected:** "No Node.js imports" — PASS
