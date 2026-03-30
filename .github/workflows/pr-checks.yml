@@ -3,10 +3,13 @@ name: PR Checks
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 jobs:
   branch-name:
     name: Branch Name
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Check branch naming convention
