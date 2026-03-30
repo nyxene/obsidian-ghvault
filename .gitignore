@@ -43,6 +43,7 @@ logs/
 
 # Private docs (local only)
 docs/private/
+docs/plans/
 
 # Misc
 *.tgz
