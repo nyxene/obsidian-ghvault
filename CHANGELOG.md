@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.1](https://github.com/nyxene/obsidian-ghvault/compare/0.1.0...0.1.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* **infra:** add push trigger to PR Checks for badge status ([#247](https://github.com/nyxene/obsidian-ghvault/issues/247)) ([#248](https://github.com/nyxene/obsidian-ghvault/issues/248)) ([6f8043c](https://github.com/nyxene/obsidian-ghvault/commit/6f8043c4a2228cfff2e4ec1fa898596befc15287))
+* **infra:** automate release assets and fix tag format ([#249](https://github.com/nyxene/obsidian-ghvault/issues/249)) ([#250](https://github.com/nyxene/obsidian-ghvault/issues/250)) ([44d9975](https://github.com/nyxene/obsidian-ghvault/commit/44d9975e446911020b66931880b6ee1721d66425))
+* **ui:** improve logo contrast for GitHub light/dark themes ([#245](https://github.com/nyxene/obsidian-ghvault/issues/245)) ([#246](https://github.com/nyxene/obsidian-ghvault/issues/246)) ([410b03f](https://github.com/nyxene/obsidian-ghvault/commit/410b03f30a32f39f68d5e3b82fabc8415c57bf3c))
+
+
+### Documentation
+
+* **infra:** restructure manual test cases catalog ([#243](https://github.com/nyxene/obsidian-ghvault/issues/243)) ([#244](https://github.com/nyxene/obsidian-ghvault/issues/244)) ([78c6c23](https://github.com/nyxene/obsidian-ghvault/commit/78c6c23ea8c6a331d328cba782301d9ac7939be4))
+
 ## 0.1.0 (2026-03-30)
 
 
